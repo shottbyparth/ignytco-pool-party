@@ -354,3 +354,6 @@ async function startServer() {
 startServer().catch(err => {
   console.error("Fatal server error:", err);
 });
+
+// Trigger comment for clean Git sync and automatic Vercel deployment activation
+
