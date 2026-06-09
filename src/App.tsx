@@ -95,6 +95,9 @@ export default function App() {
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [submittingRegistration, setSubmittingRegistration] = useState(false);
   const [submittedProof, setSubmittedProof] = useState(false);
+  const [transactionId, setTransactionId] = useState('');
+  const [screenshotBase64, setScreenshotBase64] = useState('');
+  const [screenshotName, setScreenshotName] = useState('');
 
   // Admin states
   const [adminRegistrations, setAdminRegistrations] = useState<Registration[]>([]);
@@ -102,12 +105,13 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [adminError, setAdminError] = useState('');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Ticket Pricing config
   const pricingData = {
-    t1: { name: 'Early Bird Female', amount: 899, label: 'Early Bird', sex: 'Female' },
-    t2: { name: 'Early Bird Male', amount: 1299, label: 'Early Bird', sex: 'Male' },
-    t3: { name: 'Couple (Entry for 2)', amount: 2000, label: 'Regular', sex: 'Couple' },
+    t1: { name: 'Female Entry Pass', amount: 999, label: 'Standard Pass', sex: 'Female' },
+    t2: { name: 'Male Entry Pass', amount: 1499, label: 'Standard Pass', sex: 'Male' },
+    t3: { name: 'Couple Entry Pass (2 Persons)', amount: 1999, label: 'Standard Pass', sex: 'Couple' },
   };
 
   // Nav scroll listener
@@ -187,16 +191,14 @@ export default function App() {
 
   // Admin Delete registration
   const handleDeleteRegistration = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this registration? This is irreversible.')) {
-      return;
-    }
     try {
-      const res = await fetch('/api/admin/registration', {
+      const res = await fetch(`/api/admin/registration?id=${id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
       });
       if (res.ok) {
+        setDeleteConfirmId(null);
         fetchRegistrations();
       }
     } catch (err) {
@@ -267,6 +269,22 @@ export default function App() {
     return Object.keys(errors).length === 0;
   };
 
+  // File screenshot handler helper
+  const handleScreenshotChange = (file: File) => {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      alert("Screenshot file size should be less than 8MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setScreenshotBase64(reader.result as string);
+      setScreenshotName(file.name);
+      setSubmittedProof(true);
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Trigger Registration flow
   const handleProceedToPayment = () => {
     if (!validateRegistration()) {
@@ -282,10 +300,14 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  // Save Registration details from Google Form integration and claim payment
+  // Save Registration details from inline proof and claim payment
   const handleConfirmDonePaymentProof = async () => {
     if (!submittedProof) {
-      alert("Please upload your payment screenshot over the Google Form first and check the confirmation box to complete registration!");
+      alert("Please upload your payment screenshot/proof first to complete registration!");
+      return;
+    }
+    if (!transactionId.trim()) {
+      alert("Please enter the Sender's Name on UPI Account or Payment Receipt for payment verification!");
       return;
     }
     setSubmittingRegistration(true);
@@ -307,7 +329,9 @@ export default function App() {
           instagram: formData.instagram,
           heardFrom: formData.heardFrom,
           dietary: formData.dietary,
-          ticket: ticketDescription
+          ticket: ticketDescription,
+          transactionId: transactionId,
+          screenshotImage: screenshotBase64
         })
       });
 
@@ -315,6 +339,9 @@ export default function App() {
         setRegisteredEmail(formData.email);
         setIsModalOpen(false);
         setSubmittedProof(false);
+        setTransactionId('');
+        setScreenshotBase64('');
+        setScreenshotName('');
         // Reset state
         setFormData({
           firstName: '',
@@ -531,7 +558,7 @@ export default function App() {
               >
                 {/* Premium Golden-Laser Nightlife Background Image representing luxury events & crowds */}
                 <div 
-                  className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?q=80&w=800&auto=format&fit=crop')] bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-50 group-hover:opacity-80"
+                  className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?q=95&w=1920&auto=format&fit=crop')] bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-50 group-hover:opacity-80"
                   referrerPolicy="no-referrer"
                 />
                 
@@ -558,80 +585,103 @@ export default function App() {
           <section id="events" className="bg-[#0F0F0F] border-y border-white/5 py-24 px-6 md:px-12">
             <div className="max-w-[1100px] mx-auto">
               <div className="flex items-center gap-5 mb-14">
-                <div className="font-sans text-[9px] font-light tracking-[0.5em] text-[#C9A84C] uppercase whitespace-nowrap">Upcoming Events</div>
+                <div className="font-sans text-xs font-semibold tracking-[0.4em] text-[#C9A84C] uppercase whitespace-nowrap">Upcoming Events</div>
                 <div className="flex-1 h-[1px] bg-white/5" />
               </div>
 
               {/* ACTIVE EVENT CARD */}
               <div 
                 onClick={() => { setCurrentTab('form'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                className="group flex flex-col md:flex-row justify-between items-start md:items-center gap-10 py-10 border-b border-white/5 border-t cursor-pointer hover:border-[#C9A84C]/30 transition-all duration-300"
+                className="group relative flex flex-col md:flex-row justify-between items-start md:items-center gap-10 p-8 md:p-12 mb-12 bg-gradient-to-br from-[#1a1306] to-[#0A0A0A]/95 border border-[#C9A84C]/45 border-l-[6px] border-l-[#C9A84C] rounded-lg cursor-pointer hover:shadow-2xl hover:shadow-[#C9A84C]/5 hover:border-[#C9A84C] transition-all duration-300"
               >
-                <div className="max-w-[700px]">
-                  <div className="font-sans font-light text-[9px] tracking-[0.4em] text-[#C9A84C] uppercase mb-3 flex items-center gap-2">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#C9A84C] animate-pulse" />
-                    Registrations Open · Limited Slots
+                {/* Visual indicator corner glow */}
+                <div className="absolute top-0 right-0 w-32 h-32 bg-[#C9A84C]/5 rounded-full blur-3xl pointer-events-none" />
+
+                <div className="max-w-[750px] relative z-10">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-[#C9A84C]/10 border border-[#C9A84C]/30 rounded-full mb-5 select-none animate-pulse">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#C9A84C]" />
+                    <span className="font-sans font-semibold text-[11px] tracking-[0.2em] text-[#C9A84C] uppercase">
+                      🔥 Active Event · Registrations Open
+                    </span>
                   </div>
-                  <h3 className="font-serif-cormorant font-light text-4xl md:text-5xl text-white tracking-wide group-hover:text-[#C9A84C] transition-colors duration-300 mb-3">
+                  
+                  <h3 className="font-serif-cormorant font-light text-4xl md:text-5xl lg:text-6xl text-white tracking-wide group-hover:text-[#C9A84C] transition-colors duration-300 mb-4 leading-tight">
                     Summer Pool Party
                   </h3>
-                  <div className="flex flex-wrap gap-x-6 gap-y-2 mt-4 text-[#F0EBE3]/40 font-sans text-[10px] tracking-wider leading-relaxed">
-                    <span className="flex items-center gap-1.5">
-                      <MapPin size={11} className="text-[#C9A84C]" /> Venue: <span className="text-white">Villa Ruhaniyat Farms, near cgc</span>
+                  
+                  <p className="font-sans font-light text-sm text-[#F0EBE3]/90 leading-relaxed mb-6">
+                    Dive into IGNYT Co.'s premier social pool gathering of the year. This event is designed as an exclusive <strong className="text-[#C9A84C] font-semibold">strangers meetup</strong> to connect you with like-minded, vibrant individuals in a wonderfully curated space. Enjoy <strong className="text-[#C9A84C] font-semibold">complimentary food & drink</strong> alongside custom deep-house sets, energetic pool activities, and premium hospitality. Securing spots is simple and quick.
+                  </p>
+                  
+                  <div className="flex flex-wrap gap-3 mt-4 text-[#F0EBE3]/80 font-sans text-xs md:text-sm tracking-wide leading-relaxed">
+                    <span className="flex items-center gap-1.5 bg-white/5 border border-white/5 px-3 py-1.5 rounded">
+                      <MapPin size={13} className="text-[#C9A84C]" /> Venue: <span className="text-white font-medium">Villa Ruhaniyat Farms, near cgc</span>
                     </span>
-                    <span className="flex items-center gap-1.5">
-                      <Calendar size={11} className="text-[#C9A84C]" /> Date: <span className="text-white">13 June</span>
+                    <span className="flex items-center gap-1.5 bg-white/5 border border-white/5 px-3 py-1.5 rounded">
+                      <Calendar size={13} className="text-[#C9A84C]" /> Date: <span className="text-white font-medium">13 June</span>
                     </span>
-                    <span className="flex items-center gap-1.5">
-                      <Clock size={11} className="text-[#C9A84C]" /> Time: <span className="text-white">8:00 PM — 2:00 AM</span>
+                    <span className="flex items-center gap-1.5 bg-white/5 border border-white/5 px-3 py-1.5 rounded">
+                      <Clock size={13} className="text-[#C9A84C]" /> Time: <span className="text-white font-medium">8:00 PM Onwards</span>
                     </span>
-                    <span className="flex items-center gap-1.5">
-                      <User size={11} className="text-[#C9A84C]" /> Age limit: <span className="text-white">18+ Only</span>
+                    <span className="flex items-center gap-1.5 bg-white/5 border border-white/5 px-3 py-1.5 rounded">
+                      <User size={13} className="text-[#C9A84C]" /> Age limit: <span className="text-white font-medium">18+ Only</span>
+                    </span>
+                    <span className="flex items-center gap-1.5 bg-[#C9A84C]/15 border border-[#C9A84C]/35 px-3 py-1.5 rounded text-[#C9A84C] font-medium">
+                      🥂 Complimentary Food & Drink
+                    </span>
+                    <span className="flex items-center gap-1.5 bg-[#C9A84C]/15 border border-[#C9A84C]/35 px-3 py-1.5 rounded text-[#C9A84C] font-medium">
+                      🤝 Strangers Meetup
                     </span>
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-4 self-end md:self-auto">
-                  <div className="font-sans text-[9px] tracking-[0.3em] font-light uppercase px-[18px] py-2 border border-[#C9A84C]/30 text-[#C9A84C] group-hover:bg-[#C9A84C] group-hover:text-black transition-all">
+                <div className="flex items-center gap-4 self-stretch md:self-auto justify-between md:justify-end shrink-0 relative z-10">
+                  <div className="w-full md:w-auto text-center font-sans text-xs tracking-[0.25em] font-semibold uppercase px-6 py-4.5 bg-[#C9A84C] text-black border border-[#C9A84C] group-hover:bg-transparent group-hover:text-[#C9A84C] transition-all flex items-center justify-center gap-2 rounded">
+                    <Ticket size={14} />
                     Register Now
                   </div>
-                  <span className="text-[#C9A84C] font-semibold opacity-40 group-hover:opacity-100 group-hover:translate-x-1.5 transition-all text-xl">→</span>
                 </div>
               </div>
 
               {/* UNRELEASED COMMING SOON CARD */}
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-10 py-10 border-b border-white/5 opacity-35 cursor-default select-none">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-10 py-10 border-b border-white/5 opacity-50 cursor-default select-none hover:opacity-75 transition-all">
                 <div>
-                  <div className="font-sans font-light text-[9px] tracking-[0.4em] text-white/50 uppercase mb-3">
+                  <div className="font-sans font-semibold text-xs tracking-[0.3em] text-[#C9A84C] uppercase mb-3">
                     Coming Soon
                   </div>
-                  <h3 className="font-serif-cormorant font-light text-4xl md:text-5xl text-white tracking-wide mb-3">
+                  <h3 className="font-serif-cormorant font-light text-3xl md:text-4xl text-white tracking-wide mb-3">
                     Prom Night
                   </h3>
-                  <div className="flex flex-wrap gap-x-6 mt-4 text-white/30 font-sans text-[10px] tracking-wider">
-                    <span>📍 Chandigarh & Around</span>
-                    <span>📅 Date TBA</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 text-[#F0EBE3]/60 font-sans text-xs tracking-wider">
+                    <span className="flex items-center gap-2">📍 Chandigarh & Around</span>
+                    <span className="flex items-center gap-2">📅 Date TBA</span>
                   </div>
                 </div>
                 <div>
-                  <div className="font-sans text-[9px] tracking-[0.3em] font-light uppercase px-[18px] py-2 border border-white/10 text-white/40">
+                  <div className="font-sans text-xs tracking-[0.25em] font-medium uppercase px-[22px] py-3.5 border border-white/10 text-white/50 rounded">
                     Stay Tuned
                   </div>
                 </div>
               </div>
 
-              {/* ANOTHER PLACEHOLDER CARD */}
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-10 py-10 border-b border-white/5 opacity-35 cursor-default select-none">
+              {/* WINTER BALL CARD */}
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-10 py-10 border-b border-white/5 opacity-50 cursor-default select-none hover:opacity-75 transition-all">
                 <div>
-                  <div className="font-sans font-light text-[9px] tracking-[0.4em] text-white/50 uppercase mb-3">
-                    In Development
+                  <div className="font-sans font-semibold text-xs tracking-[0.3em] text-[#C9A84C] uppercase mb-3">
+                    Coming Soon · Winter Event
                   </div>
-                  <h3 className="font-serif-cormorant font-light text-4xl md:text-5xl text-white tracking-wide mb-3">
-                    More Projects
+                  <h3 className="font-serif-cormorant font-light text-3xl md:text-4xl text-white tracking-wide mb-3">
+                    Winter Ball
                   </h3>
-                  <div className="flex flex-wrap gap-x-6 mt-4 text-white/30 font-sans text-[10px] tracking-wider">
-                    <span>📍 Chandigarh & Beyond</span>
-                    <span>📅 Curating Premium Concepts</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4 text-[#F0EBE3]/60 font-sans text-xs tracking-wider">
+                    <span className="flex items-center gap-2">📍 Premium Hotel Grand Ballroom</span>
+                    <span className="flex items-center gap-2">📅 November 2026</span>
+                    <span className="flex items-center gap-2">👔 Dress Code: Black Tie Elegant</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="font-sans text-xs tracking-[0.25em] font-medium uppercase px-[22px] py-3.5 border border-white/10 text-white/50 rounded">
+                    Stay Tuned
                   </div>
                 </div>
               </div>
@@ -768,7 +818,7 @@ export default function App() {
               </div>
               <div className="p-6 border-r md:border-r-0 border-b border-white/5">
                 <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2.5">Time</div>
-                <div className="font-serif-cormorant text-lg text-white leading-tight">8:00 PM — 2:00 AM</div>
+                <div className="font-serif-cormorant text-lg text-white leading-tight">8:00 PM Onwards</div>
                 <div className="font-sans text-[9px] text-[#F0EBE3]/30 mt-1">Gates close strictly at 9:30 PM</div>
               </div>
               <div className="p-6 border-r border-white/5">
@@ -782,59 +832,59 @@ export default function App() {
                 <div className="font-sans text-[9px] text-[#F0EBE3]/30 mt-1">Valid physical ID mandatory</div>
               </div>
               <div className="p-6">
-                <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2.5">Drinks</div>
+                <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2.5">Drink</div>
                 <div className="font-serif-cormorant text-lg text-white leading-tight">BYOB</div>
-                <div className="font-sans text-[9px] text-[#F0EBE3]/30 mt-1">Welcome drinks included</div>
+                <div className="font-sans text-[9px] text-[#F0EBE3]/30 mt-1">Welcome drink included</div>
               </div>
             </div>
           </div>
 
           {/* WHAT'S INCLUDED ROW */}
           <div className="flex items-center gap-5 mt-14 mb-8">
-            <span className="font-sans text-[9px] tracking-[0.5em] text-[#C9A84C] uppercase whitespace-nowrap">What's Included</span>
+            <span className="font-sans text-xs font-semibold tracking-[0.4em] text-[#C9A84C] uppercase whitespace-nowrap">What's Included</span>
             <div className="flex-1 h-[1px] bg-white/5" />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 mb-14">
             <div className="bg-[#0F0F0F] border border-white/5 p-6 relative pl-10 before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[#C9A84C]">
               <span className="absolute left-4 top-5 text-lg">🍹</span>
-              <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">Drinks On Us</h4>
-              <p className="font-sans text-xs font-light text-[#F0EBE3]/40 leading-relaxed">
-                <strong className="text-[#C9A84C] font-normal">1–2 premium welcome drinks are included</strong> with every pass type. BYOB is encouraged — bring your choices for the remainder of the night.
+              <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">Complimentary Drink</h4>
+              <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
+                <strong className="text-[#C9A84C] font-semibold">1–2 premium welcome drinks are included</strong> with every pass type. BYOB is encouraged — feel free to bring your choice for the remainder of any preferences.
               </p>
             </div>
             <div className="bg-[#0F0F0F] border border-white/5 p-6 relative pl-10 before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[#C9A84C]">
               <span className="absolute left-4 top-5 text-lg">🍽️</span>
-              <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">Meals On Us</h4>
-              <p className="font-sans text-xs font-light text-[#F0EBE3]/40 leading-relaxed">
-                No outside catering is needed. <strong className="text-[#C9A84C] font-normal">Splendid, piping hot meals are fully sorted</strong> inside the compound. Come hungry, leave completely satisfied.
+              <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">Complimentary Food</h4>
+              <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
+                No outside catering is needed. <strong className="text-[#C9A84C] font-semibold">Splendid, piping hot complimentary food is fully sorted</strong> inside the compound. Come hungry, leave completely satisfied.
               </p>
             </div>
             <div className="bg-[#0F0F0F] border border-white/5 p-6 relative pl-10 before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[#C9A84C]">
               <span className="absolute left-4 top-5 text-lg">🎵</span>
               <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">All Night Sounds</h4>
-              <p className="font-sans text-xs font-light text-[#F0EBE3]/40 leading-relaxed">
-                Crystals and deep bass. Non-stop, custom-curated underground tracks playing live from <strong className="text-[#C9A84C] font-normal">8:00 PM all the way through 2:00 AM</strong>.
+              <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
+                Crystals and deep bass. Non-stop, custom-curated underground tracks playing live from <strong className="text-[#C9A84C] font-semibold">8:00 PM onwards</strong>.
               </p>
             </div>
             <div className="bg-[#0F0F0F] border border-white/5 p-6 relative pl-10 before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[#C9A84C]">
               <span className="absolute left-4 top-5 text-lg">🏊</span>
               <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">Pool Activities & Games</h4>
-              <p className="font-sans text-xs font-light text-[#F0EBE3]/40 leading-relaxed">
+              <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                 Noodle jousting, deep-water volleyball, synchro jumps, and bespoke ambient glow accessories for a picture-perfect aquatic session.
               </p>
             </div>
             <div className="bg-[#0F0F0F] border border-white/5 p-6 relative pl-10 before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[#C9A84C]">
               <span className="absolute left-4 top-5 text-lg">🤝</span>
               <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">High-Context Connections</h4>
-              <p className="font-sans text-xs font-light text-[#F0EBE3]/40 leading-relaxed">
+              <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                 No typical noisy club cliqueyness. We design interactions with structured breaks, games, and dynamic icebreakers to get you conversing instantly.
               </p>
             </div>
             <div className="bg-[#0F0F0F] border border-white/5 p-6 relative pl-10 before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[#C9A84C]">
               <span className="absolute left-4 top-5 text-lg">🎲</span>
               <h4 className="font-serif-cormorant text-xl text-white font-semibold mb-1">Group Party Games</h4>
-              <p className="font-sans text-xs font-light text-[#F0EBE3]/40 leading-relaxed">
+              <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                 Drunk Jenga towers, high-stakes Truth or Dare cards, custom Never Have I Ever rounds, and quick-fire flip cup relay tracks.
               </p>
             </div>
@@ -842,34 +892,34 @@ export default function App() {
 
           {/* TICKET PRICING LISTING */}
           <div className="flex items-center gap-5 mb-8">
-            <span className="font-sans text-[9px] tracking-[0.5em] text-[#C9A84C] uppercase whitespace-nowrap">Ticket Pricing</span>
+            <span className="font-sans text-xs font-semibold tracking-[0.4em] text-[#C9A84C] uppercase whitespace-nowrap">Ticket Pricing</span>
             <div className="flex-1 h-[1px] bg-white/5" />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 mb-14">
-            <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 p-7 text-center relative overflow-hidden bg-gradient-to-br from-[#141414] to-[#0F0F0F]">
-              <span className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] font-normal uppercase mb-3 block">⚡ Early Bird</span>
+            <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 p-7 text-center relative overflow-hidden bg-gradient-to-br from-[#141414] to-[#0F0F0F] rounded">
+              <span className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] font-semibold uppercase mb-3 block">🎟️ Pass</span>
               <h4 className="font-serif-cormorant text-2xl text-white font-light mb-2">Female Entry Pass</h4>
               <div className="font-serif-cormorant text-[42px] text-white font-semibold flex items-center justify-center">
-                <span className="text-xl font-light text-[#F0EBE3]/40 mr-1">₹</span>899
+                <span className="text-xl font-light text-[#F0EBE3]/50 mr-1">₹</span>999
               </div>
-              <span className="font-sans text-[8px] text-[#F0EBE3]/20 mt-3 block tracking-widest text-[#C9A84C]/80">Extremely Limited Quantities</span>
+              <span className="font-sans text-xs text-[#F0EBE3]/60 mt-3 block tracking-wide">Limited Passes Available</span>
             </div>
             
-            <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 p-7 text-center relative overflow-hidden bg-gradient-to-br from-[#141414] to-[#0F0F0F]">
-              <span className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] font-normal uppercase mb-3 block">⚡ Early Bird</span>
+            <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 p-7 text-center relative overflow-hidden bg-gradient-to-br from-[#141414] to-[#0F0F0F] rounded">
+              <span className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] font-semibold uppercase mb-3 block">🎟️ Pass</span>
               <h4 className="font-serif-cormorant text-2xl text-white font-light mb-2">Male Entry Pass</h4>
               <div className="font-serif-cormorant text-[42px] text-white font-semibold flex items-center justify-center">
-                <span className="text-xl font-light text-[#F0EBE3]/40 mr-1">₹</span>1,299
+                <span className="text-xl font-light text-[#F0EBE3]/50 mr-1">₹</span>1,499
               </div>
-              <span className="font-sans text-[8px] text-[#F0EBE3]/20 mt-3 block tracking-widest text-[#C9A84C]/80">Extremely Limited Quantities</span>
+              <span className="font-sans text-xs text-[#F0EBE3]/60 mt-3 block tracking-wide">Limited Passes Available</span>
             </div>
 
-            <div className="bg-[#0F0F0F] border border-white/5 p-7 text-center hover:border-[#C9A84C]/35 transition-colors">
-              <span className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] font-normal uppercase mb-3 block">Couple Special Pass</span>
+            <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 p-7 text-center hover:border-[#C9A84C]/35 transition-colors relative overflow-hidden bg-gradient-to-br from-[#141414] to-[#0F0F0F] rounded">
+              <span className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] font-semibold uppercase mb-3 block">🎟️ Pass</span>
               <h4 className="font-serif-cormorant text-2xl text-white font-light mb-2">Couple Entry (2 Persons)</h4>
               <div className="font-serif-cormorant text-[42px] text-white font-semibold flex items-center justify-center">
-                <span className="text-xl font-light text-[#F0EBE3]/40 mr-1">₹</span>2,000
+                <span className="text-xl font-light text-[#F0EBE3]/50 mr-1">₹</span>1,999
               </div>
               <span className="font-sans text-[8px] text-[#F0EBE3]/20 mt-3 block tracking-widest">Entry valid for standard mixed pairs only</span>
             </div>
@@ -885,7 +935,7 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">First Name *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">First Name *</label>
                 <input 
                   type="text" 
                   className={`bg-[#0F0F0F] border ${formErrors.firstName ? 'border-red-500' : 'border-white/5'} text-white font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 placeholder:text-[#F0EBE3]/15 placeholder:italic`}
@@ -900,7 +950,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Last Name *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Last Name *</label>
                 <input 
                   type="text" 
                   className={`bg-[#0F0F0F] border ${formErrors.lastName ? 'border-red-500' : 'border-white/5'} text-white font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 placeholder:text-[#F0EBE3]/15 placeholder:italic`}
@@ -915,7 +965,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Age * (Must be 18+)</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Age * (Must be 18+)</label>
                 <input 
                   type="number" 
                   className={`bg-[#0F0F0F] border ${formErrors.age ? 'border-red-500' : 'border-white/5'} text-white font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 placeholder:text-[#F0EBE3]/15 placeholder:italic`}
@@ -932,7 +982,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Gender *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Gender *</label>
                 <div className="relative">
                   <select 
                     className={`bg-[#0F0F0F] border ${formErrors.gender ? 'border-red-500' : 'border-white/5'} text-[#F0EBE3] font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 appearance-none`}
@@ -953,7 +1003,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Phone Number *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Phone Number *</label>
                 <input 
                   type="tel" 
                   className={`bg-[#0F0F0F] border ${formErrors.phone ? 'border-red-500' : 'border-white/5'} text-white font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 placeholder:text-[#F0EBE3]/15 placeholder:italic`}
@@ -968,7 +1018,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Email Address *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Email Address *</label>
                 <input 
                   type="email" 
                   className={`bg-[#0F0F0F] border ${formErrors.email ? 'border-red-500' : 'border-white/5'} text-white font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 placeholder:text-[#F0EBE3]/15 placeholder:italic`}
@@ -983,7 +1033,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">City of Origin *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">City of Origin *</label>
                 <div className="relative">
                   <select 
                     className={`bg-[#0F0F0F] border ${formErrors.city ? 'border-red-500' : 'border-white/5'} text-[#F0EBE3] font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 appearance-none`}
@@ -1008,7 +1058,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Instagram Handle</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Instagram Handle</label>
                 <input 
                   type="text" 
                   className="bg-[#0F0F0F] border border-white/5 text-white font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 placeholder:text-[#F0EBE3]/15 placeholder:italic"
@@ -1019,7 +1069,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">How Did You Hear About Us? *</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">How Did You Hear About Us? *</label>
                 <div className="relative">
                   <select 
                     className={`bg-[#0F0F0F] border ${formErrors.heardFrom ? 'border-red-500' : 'border-white/5'} text-[#F0EBE3] font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 appearance-none`}
@@ -1042,7 +1092,7 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Dietary Guidelines</label>
+                <label className="font-sans text-xs tracking-[0.25em] text-[#C9A84C] uppercase font-semibold">Dietary Guidelines</label>
                 <div className="relative">
                   <select 
                     className="bg-[#0F0F0F] border border-white/5 text-[#F0EBE3] font-serif-cormorant text-base p-4 outline-none w-full focus:border-[#C9A84C]/45 appearance-none"
@@ -1081,9 +1131,9 @@ export default function App() {
                       if(formErrors.ticket) setFormErrors({...formErrors, ticket: ''});
                     }}
                   />
-                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#C9A84C] mb-1">⚡ Female</span>
-                  <span className="font-serif-cormorant text-lg text-white font-medium">Early Pass Female</span>
-                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹899</span>
+                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#C9A84C] mb-1">🎟️ Female</span>
+                  <span className="font-serif-cormorant text-lg text-white font-medium">Female Pass</span>
+                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹999</span>
                 </label>
 
                 <label className={`border p-5 text-center cursor-pointer transition-all flex flex-col justify-between items-center ${
@@ -1102,9 +1152,9 @@ export default function App() {
                       if(formErrors.ticket) setFormErrors({...formErrors, ticket: ''});
                     }}
                   />
-                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#C9A84C] mb-1">⚡ Male</span>
-                  <span className="font-serif-cormorant text-lg text-white font-medium">Early Pass Male</span>
-                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹1,299</span>
+                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#C9A84C] mb-1">🎟️ Male</span>
+                  <span className="font-serif-cormorant text-lg text-white font-medium">Male Pass</span>
+                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹1,499</span>
                 </label>
 
                 <label className={`border p-5 text-center cursor-pointer transition-all flex flex-col justify-between items-center ${
@@ -1123,61 +1173,61 @@ export default function App() {
                       if(formErrors.ticket) setFormErrors({...formErrors, ticket: ''});
                     }}
                   />
-                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#F0EBE3]/30 mb-1">Pass For 2</span>
-                  <span className="font-serif-cormorant text-lg text-white font-medium">Couple Entry Pass</span>
-                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹2,000</span>
+                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#F0EBE3]/30 mb-1">🎟️ Couple</span>
+                  <span className="font-serif-cormorant text-lg text-white font-medium">Couple Pass</span>
+                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹1,999</span>
                 </label>
               </div>
 
-              {formErrors.ticket && <span className="font-sans text-[9px] text-red-400 tracking-wider mt-0.5">{formErrors.ticket}</span>}
+              {formErrors.ticket && <span className="font-sans text-xs font-semibold text-red-400 tracking-wider mt-1">{formErrors.ticket}</span>}
             </div>
 
             {/* TERMS ACCORDION LIST */}
             <div className="flex items-center gap-5 mt-10 mb-6">
-              <span className="font-sans text-[9px] tracking-[0.5em] text-[#C9A84C] uppercase whitespace-nowrap">Terms & Conditions</span>
+              <span className="font-sans text-xs font-semibold tracking-[0.4em] text-[#C9A84C] uppercase whitespace-nowrap">Terms & Conditions</span>
               <div className="flex-1 h-[1px] bg-white/5" />
             </div>
 
             <ul className="list-none border border-white/5 bg-[#0F0F0F] rounded-sm divide-y divide-white/5">
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">01</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   This event is strictly <strong className="text-white font-semibold">18 years of age or older</strong>. Valid government-issued photo ID is mandatory at physical entry. No exceptions.
                 </p>
               </li>
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">02</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   <strong className="text-white font-semibold">Zero tolerance for narcotics or illegal contraband.</strong> Anyone caught violating state laws will be instantly escorted off-property and handed over to relevant law agencies.
                 </p>
               </li>
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">03</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   IGNYT Co. preserves absolute administrative authority to <strong className="text-white font-semibold">revoke entry or escort guests out</strong> of the site at any mark if found breaking code or behaving improperly, without reimbursement.
                 </p>
               </li>
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">04</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   By registering, you granting IGNYT Co. full legal <strong className="text-white font-semibold">permission to photograph and capture video footage</strong> of the pool party for use on social media formats (Instagram, YouTube, etc.) without royalty claims.
                 </p>
               </li>
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">05</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   Passes are completely <strong className="text-white font-semibold">non-transferable and non-refundable</strong> once generated. In rare force-majeure cases of organizer cancellation, a prompt refund will be sorted.
                 </p>
               </li>
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">06</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   BYOB is permitted within healthy moral constraints. Organizers maintain zero liability for individual safety or actions on heavily intoxicated guests.
                 </p>
               </li>
               <li className="flex gap-4 p-5 items-start">
                 <span className="font-serif-cormorant text-sm text-[#C9A84C] font-semibold">07</span>
-                <p className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed tracking-wider">
+                <p className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed tracking-wide">
                   Dress guidelines strictly demand <strong className="text-white font-semibold">All Black garments optionally accented with glowing/Neon options</strong>. Entry is forbidden for non-compliance.
                 </p>
               </li>
@@ -1185,7 +1235,7 @@ export default function App() {
 
             {/* CONSENT AND RULES ASSURANCE */}
             <div className="flex items-center gap-5 mt-10 mb-6">
-              <span className="font-sans text-[9px] tracking-[0.5em] text-[#C9A84C] uppercase whitespace-nowrap">Assurances & Consent</span>
+              <span className="font-sans text-xs font-semibold tracking-[0.4em] text-[#C9A84C] uppercase whitespace-nowrap">Assurances & Consent</span>
               <div className="flex-1 h-[1px] bg-white/5" />
             </div>
 
@@ -1193,14 +1243,14 @@ export default function App() {
               <label className="flex items-start gap-4 cursor-pointer">
                 <input 
                   type="checkbox" 
-                  className="w-4 h-4 rounded border-white/5 bg-[#0F0F0F] mt-1 accent-[#C9A84C]"
+                  className="w-5 h-5 rounded border-white/10 bg-[#0F0F0F] mt-1 accent-[#C9A84C] shrink-0"
                   checked={consents.c1}
                   onChange={e => {
                     setConsents({...consents, c1: e.target.checked});
                     if(formErrors.consent) setFormErrors({...formErrors, consent: ''});
                   }}
                 />
-                <span className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed">
+                <span className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                   I confirm that I am <strong className="text-white font-semibold">18 years of age or older</strong> and will have an official physical government photo ID with me for registration checks at the gate.
                 </span>
               </label>
@@ -1208,14 +1258,14 @@ export default function App() {
               <label className="flex items-start gap-4 cursor-pointer">
                 <input 
                   type="checkbox" 
-                  className="w-4 h-4 rounded border-white/5 bg-[#0F0F0F] mt-1 accent-[#C9A84C]"
+                  className="w-5 h-5 rounded border-white/10 bg-[#0F0F0F] mt-1 accent-[#C9A84C] shrink-0"
                   checked={consents.c2}
                   onChange={e => {
                     setConsents({...consents, c2: e.target.checked});
                     if(formErrors.consent) setFormErrors({...formErrors, consent: ''});
                   }}
                 />
-                <span className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed">
+                <span className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                   I agree that <strong className="text-white font-semibold">IGNYT Co. may photograph and capture high-definition video</strong> of the gather to use globally for marketing, reels, recaps, and catalogs without legal bounds.
                 </span>
               </label>
@@ -1223,14 +1273,14 @@ export default function App() {
               <label className="flex items-start gap-4 cursor-pointer">
                 <input 
                   type="checkbox" 
-                  className="w-4 h-4 rounded border-white/5 bg-[#0F0F0F] mt-1 accent-[#C9A84C]"
+                  className="w-5 h-5 rounded border-white/10 bg-[#0F0F0F] mt-1 accent-[#C9A84C] shrink-0"
                   checked={consents.c3}
                   onChange={e => {
                     setConsents({...consents, c3: e.target.checked});
                     if(formErrors.consent) setFormErrors({...formErrors, consent: ''});
                   }}
                 />
-                <span className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed">
+                <span className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                   I understand that <strong className="text-white font-semibold">illicit narcotics are absolutely prohibited</strong> in any shape. I accept that organizers holds the full legal privilege to immediately report me or banish me if caught using.
                 </span>
               </label>
@@ -1238,19 +1288,19 @@ export default function App() {
               <label className="flex items-start gap-4 cursor-pointer">
                 <input 
                   type="checkbox" 
-                  className="w-4 h-4 rounded border-white/5 bg-[#0F0F0F] mt-1 accent-[#C9A84C]"
+                  className="w-5 h-5 rounded border-white/10 bg-[#0F0F0F] mt-1 accent-[#C9A84C] shrink-0"
                   checked={consents.c4}
                   onChange={e => {
                     setConsents({...consents, c4: e.target.checked});
                     if(formErrors.consent) setFormErrors({...formErrors, consent: ''});
                   }}
                 />
-                <span className="font-sans text-[11px] font-light text-[#F0EBE3]/40 leading-relaxed">
+                <span className="font-sans text-sm font-normal text-[#F0EBE3]/75 leading-relaxed">
                   I have read, understood, and voluntarily agree to comply with all <strong className="text-white font-semibold">Terms & Conditions</strong>. I acknowledge that passes are non-refundable.
                 </span>
               </label>
 
-              {formErrors.consent && <span className="font-sans text-[10px] text-red-400 tracking-wider mt-1">{formErrors.consent}</span>}
+              {formErrors.consent && <span className="font-sans text-xs font-semibold text-red-400 tracking-wider mt-1">{formErrors.consent}</span>}
             </div>
 
             <div className="text-center mt-12 mb-8">
@@ -1261,7 +1311,7 @@ export default function App() {
               >
                 Proceed to Payment
               </button>
-              <div className="font-sans text-[9px] tracking-[0.2em] text-[#F0EBE3]/15 uppercase mt-5">
+              <div className="font-sans text-xs tracking-[0.2em] text-[#F0EBE3]/40 uppercase mt-5">
                 Scan UPI QR Code to verify admission
               </div>
             </div>
@@ -1290,7 +1340,7 @@ export default function App() {
           <p className="font-sans font-light text-sm text-[#F0EBE3]/60 leading-relaxed tracking-wider mb-10">
             Your spot has been earmarked for the legendary <strong className="text-white font-medium">Summer Pool Party</strong> by IGNYT Co.<br /><br />
             We have dispatched a notification summary to <strong className="text-[#C9A84C] font-normal">{registeredEmail}</strong>.<br />
-            Since tickets require confirmation of payment, make sure you uploaded the invoice screenshot inside the payment form. Our organizers will check your submission against Google Form receipts and verify your seat shortly!<br /><br />
+            Since tickets require confirmation of payment, our organizers will check your submission and verify your seat shortly against the provided UPI Sender Name!<br /><br />
             <span className="block border border-white/5 bg-[#0F0F0F] p-4 rounded text-xs text-[#F0EBE3]/80 mb-4 text-left font-sans">
               <strong>Need instant assistance? Contact Organizer:</strong><br />
               📞 Phone: <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a><br />
@@ -1427,9 +1477,13 @@ export default function App() {
                     ₹{adminRegistrations
                       .filter(r => r.status === 'Verified')
                       .reduce((acc, curr) => {
-                        if (curr.ticket.includes('899')) return acc + 899;
-                        if (curr.ticket.includes('1,299') || curr.ticket.includes('1299')) return acc + 1299;
-                        if (curr.ticket.includes('2,000') || curr.ticket.includes('2000')) return acc + 2000;
+                        const match = curr.ticket.match(/₹\s*(\d+)/);
+                        if (match) {
+                          return acc + parseInt(match[1]);
+                        }
+                        if (curr.ticket.includes('999')) return acc + 999;
+                        if (curr.ticket.includes('1499')) return acc + 1499;
+                        if (curr.ticket.includes('1999')) return acc + 1999;
                         return acc;
                       }, 0).toLocaleString('en-IN')
                     }
@@ -1490,7 +1544,29 @@ export default function App() {
                           </td>
                           <td className="p-4">
                             <div className="font-serif-cormorant text-base text-white">{r.ticket}</div>
-                            <div className="font-sans text-[9px] text-[#F0EBE3]/20 tracking-wider mt-0.5">Diet: {r.dietary}</div>
+                            {r.transactionId && (
+                              <div className="font-sans text-[10px] text-[#C9A84C]/90 mt-1 uppercase tracking-wider bg-[#C9A84C]/5 border border-[#C9A84C]/10 px-2 py-0.5 rounded inline-block font-medium">
+                                UPI Name: {r.transactionId}
+                              </div>
+                            )}
+                            {r.screenshotImage ? (
+                              <div className="mt-1.5 flex items-center gap-1.5">
+                                <span className="text-[9px] text-[#F0EBE3]/40 font-sans">Screenshot:</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const w = window.open();
+                                    w?.document.write(`<img src="${r.screenshotImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+                                  }}
+                                  className="text-[9px] text-white underline hover:text-[#C9A84C] font-sans cursor-pointer"
+                                >
+                                  View Proof ↗
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[8px] text-[#F0EBE3]/20 font-sans mt-1">No screenshot</div>
+                            )}
+                            <div className="font-sans text-[9px] text-[#F0EBE3]/25 tracking-wider mt-1 block">Diet: {r.dietary}</div>
                           </td>
                           <td className="p-4">
                             <span className={`inline-block font-sans text-[8px] tracking-widest uppercase px-2.5 py-1 rounded-sm border ${
@@ -1503,21 +1579,41 @@ export default function App() {
                           </td>
                           <td className="p-4 text-right">
                             <div className="flex justify-end gap-2 items-center">
-                              {r.status !== 'Verified' && (
-                                <button 
-                                  onClick={() => handleVerifyRegistration(r.id)}
-                                  className="font-sans text-[8px] tracking-widest uppercase text-black bg-[#C9A84C] hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] px-3 py-1.5 transition-all"
-                                >
-                                  ✓ Verify Payment
-                                </button>
+                              {deleteConfirmId === r.id ? (
+                                <div className="flex items-center gap-1.5 bg-[#1C1212] border border-red-900/40 p-1 px-2 rounded">
+                                  <span className="text-[9px] text-[#FF6363] font-sans tracking-wide uppercase select-none mr-1 font-semibold">Delete?</span>
+                                  <button
+                                    onClick={() => handleDeleteRegistration(r.id)}
+                                    className="font-sans text-[9px] tracking-widest uppercase text-red-100 bg-red-600 hover:bg-red-700 px-3 py-1 transition-all"
+                                  >
+                                    Yes
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirmId(null)}
+                                    className="font-sans text-[9px] tracking-widest uppercase text-white bg-white/10 hover:bg-white/20 px-3 py-1 transition-all"
+                                  >
+                                    No
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  {r.status !== 'Verified' && (
+                                    <button 
+                                      onClick={() => handleVerifyRegistration(r.id)}
+                                      className="font-sans text-[8px] tracking-widest uppercase text-black bg-[#C9A84C] hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] px-3 py-1.5 transition-all"
+                                    >
+                                      ✓ Verify Payment
+                                    </button>
+                                  )}
+                                  <button 
+                                    onClick={() => setDeleteConfirmId(r.id)}
+                                    className="text-red-400 hover:text-red-300 hover:bg-white/5 p-2 rounded transition-colors"
+                                    title="Delete attendee"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </>
                               )}
-                              <button 
-                                onClick={() => handleDeleteRegistration(r.id)}
-                                className="text-red-400 hover:text-red-300 hover:bg-white/5 p-2 rounded transition-colors"
-                                title="Delete attendee"
-                              >
-                                <Trash2 size={13} />
-                              </button>
                             </div>
                           </td>
                         </tr>
@@ -1618,58 +1714,105 @@ export default function App() {
               </div>
             )}
 
-            {/* STEP 2: EMBEDDED GOOGLE FORM SCREEN */}
+            {/* STEP 2: INTEGRATED IMMERSIVE PAYMENT PROOF SUBMISSION */}
             {modalStep === 2 && (
               <div className="animate-rise">
-                <div className="text-left mb-4">
+                <div className="text-left mb-6">
                   <h4 className="font-serif-cormorant text-lg text-[#C9A84C] font-light mb-1">Verify Upload Proof</h4>
-                  <p className="font-sans text-[9px] text-[#F0EBE3]/40 tracking-wider">
-                    Please use the integrated form below to key in details and upload your screenshot proof directly. 
+                  <p className="font-sans text-[9.3px] text-[#F0EBE3]/50 tracking-wider leading-relaxed">
+                    Review and finalize your session pass reservation. Paste your transaction tracking code and attach your payment receipt screenshot. No external logins required.
                   </p>
                 </div>
 
-                {/* EMEDDED GOOGLE FORM IFRAME */}
-                <div className="bg-white rounded overflow-hidden mb-5 h-[340px] border border-white/10 shadow relative">
-                  <iframe 
-                    src="https://docs.google.com/forms/d/e/1FAIpQLSexh4WDQR8D_hzRUELWFsGZnvMqwOkHCtb_sy269s7bk1LIug/viewform?embedded=true" 
-                    className="w-full h-full border-0 absolute inset-0 bg-white" 
-                    title="Payment Proof Upload Google Form"
-                  >
-                    Loading Form...
-                  </iframe>
+                {/* INTEGRATED PAYMENT PROOF FORMS */}
+                <div className="bg-[#0A0A0A]/80 border border-white/5 p-5 rounded mb-6 flex flex-col gap-4 text-left">
+                  <div>
+                    <label className="font-sans text-xs tracking-[0.2em] font-semibold text-[#C9A84C] uppercase block mb-2">
+                      Sender Name on UPI Account or Receipt *
+                    </label>
+                    <input 
+                      type="text"
+                      className="w-full bg-[#121212] border border-white/20 p-3.5 font-sans text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#C9A84C] transition-all rounded tracking-wide font-medium"
+                      placeholder="e.g. Rahul Sharma"
+                      value={transactionId}
+                      onChange={e => {
+                        setTransactionId(e.target.value);
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-sans text-xs tracking-[0.2em] font-semibold text-[#C9A84C] uppercase block mb-2">
+                      Screenshot Proof *
+                    </label>
+
+                    {screenshotBase64 ? (
+                      <div className="border border-[#C9A84C]/20 bg-[#121212] p-4 rounded flex flex-col items-center gap-3 relative">
+                        <img 
+                          src={screenshotBase64} 
+                          alt="Screenshot Proof" 
+                          className="max-h-[140px] object-contain rounded border border-white/5 shadow-lg" 
+                        />
+                        <div className="text-center w-full">
+                          <p className="font-mono text-xs text-[#F0EBE3]/70 truncate max-w-[200px] mx-auto mb-1.5">{screenshotName}</p>
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setScreenshotBase64('');
+                              setScreenshotName('');
+                              setSubmittedProof(false);
+                            }}
+                            className="font-sans text-[10px] tracking-widest text-red-400 hover:text-red-300 uppercase cursor-pointer font-semibold"
+                          >
+                            Remove & pick another
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div 
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={e => {
+                          e.preventDefault();
+                          if (e.dataTransfer.files?.[0]) handleScreenshotChange(e.dataTransfer.files[0]);
+                        }}
+                        className="border border-dashed border-white/20 hover:border-[#C9A84C]/50 bg-[#121212] p-7 rounded text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 group hover:bg-[#151515]"
+                        onClick={() => document.getElementById('screenshot_input')?.click()}
+                      >
+                        <input 
+                          type="file" 
+                          id="screenshot_input" 
+                          className="hidden" 
+                          accept="image/*"
+                          onChange={e => e.target.files?.[0] && handleScreenshotChange(e.target.files[0])}
+                        />
+                        <span className="text-2xl group-hover:scale-110 transition-transform">📸</span>
+                        <p className="font-sans text-xs text-white/85">Drag & drop receipt screenshot or <span className="text-[#C9A84C] underline font-medium">browse files</span></p>
+                        <p className="font-sans text-[10px] text-[#F0EBE3]/40 mt-1">PNG, JPG, JPEG formats are fully supported</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* CONFIRM UPLOAD CHECKBOX (MANDATORY TO COMPLETE RESERVATION) */}
-                <div className="bg-[#151515] border border-[#C9A84C]/25 p-4 rounded mb-5 flex items-start gap-3 text-left">
-                  <input 
-                    type="checkbox" 
-                    id="submittedProofCheckbox"
-                    className="w-4 h-4 rounded border-white/10 bg-[#0F0F0F] mt-0.5 accent-[#C9A84C] cursor-pointer"
-                    checked={submittedProof}
-                    onChange={e => setSubmittedProof(e.target.checked)}
-                  />
-                  <label htmlFor="submittedProofCheckbox" className="font-sans text-[10.5px] font-light text-white/80 leading-relaxed cursor-pointer select-none">
-                    I confirm that I have <span className="text-[#C9A84C] font-semibold">uploaded my payment screenshot/proof</span> on the Google Form above. I understand my registration will be verified against this proof.
-                  </label>
-                </div>
-
-                <div className="font-sans text-[9.5px] text-[#F0EBE3]/40 leading-relaxed tracking-wider mb-6 text-left">
-                  💡 <span className="text-[#C9A84C]">Guide:</span> Make sure you submitted the Google Form inside the panel above before continuing. Once done, click the button below to secure your registration slot inside our secure directory!
+                {/* SECURED NOTE */}
+                <div className="bg-[#111111] border border-white/[0.02] p-3.5 rounded mb-6 text-left">
+                  <p className="font-sans text-[9.5px] text-[#F0EBE3]/60 leading-relaxed">
+                    💡 <span className="text-[#C9A84C] font-medium">Instant Verification:</span> Once submitted, your registration record remains pending until validated against physical statement matching. Your verified ticket is automatically dispatched to your email address.
+                  </p>
                 </div>
 
                 <div className="flex gap-2.5">
                   <button 
                     onClick={() => setModalStep(1)}
-                    className="w-1/3 border border-white/5 bg-transparent text-[#F0EBE3]/40 hover:text-white font-sans text-[9px] tracking-wider uppercase p-4"
+                    className="w-1/3 border border-white/5 bg-transparent text-[#F0EBE3]/40 hover:text-white font-sans text-[9px] tracking-widest uppercase p-4"
                   >
                     ← Back
                   </button>
                   <button 
                     onClick={handleConfirmDonePaymentProof}
-                    disabled={submittingRegistration || !submittedProof}
+                    disabled={submittingRegistration || !submittedProof || !transactionId.trim()}
                     className="w-2/3 bg-[#C9A84C] text-black font-sans text-[9.5px] tracking-[0.25em] h-[50px] uppercase hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all flex items-center justify-center disabled:opacity-30 disabled:hover:bg-[#C9A84C] disabled:hover:text-black cursor-pointer disabled:cursor-not-allowed"
                   >
-                    {submittingRegistration ? 'Securing Slot...' : '✓ Done & Claim Ticket'}
+                    {submittingRegistration ? 'Securing Pass...' : '✓ Done & Claim Ticket'}
                   </button>
                 </div>
               </div>
