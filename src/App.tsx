@@ -527,25 +527,27 @@ export default function App() {
                 href="https://instagram.com/ignyt.co" 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="border border-white/5 aspect-[3/4] flex flex-col items-center justify-center bg-[#070707] relative overflow-hidden group hover:border-[#C9A84C]/25 transition-all duration-300 rounded"
+                className="border border-white/5 aspect-[3/4] flex flex-col items-center justify-center bg-[#070707] relative overflow-hidden group hover:border-[#C9A84C]/25 transition-all duration-300 rounded shadow-2xl"
               >
-                {/* Cinematic Background Image representing high-end spark and nightlife sessions */}
+                {/* Premium Golden-Laser Nightlife Background Image representing luxury events & crowds */}
                 <div 
-                  className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1492684223066-81342ee5ff30?q=80&w=800&auto=format&fit=crop')] bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-30 group-hover:opacity-55"
+                  className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?q=80&w=800&auto=format&fit=crop')] bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-50 group-hover:opacity-80"
                   referrerPolicy="no-referrer"
                 />
                 
-                {/* Aesthetic Dark Overlay & Radial Glow */}
-                <div className="absolute inset-0 bg-[#0F0F0F]/60 group-hover:bg-[#0F0F0F]/45 transition-colors duration-500" />
-                <div className="absolute inset-0 bg-radial-gradient from-[#C9A84C]/15 via-transparent to-transparent" />
+                {/* Aesthetic Dark Vignette Overlay & Radial Gold Glow */}
+                <div className="absolute inset-0 bg-[#0F0F0F]/65 group-hover:bg-[#0F0F0F]/40 transition-colors duration-500" />
+                <div className="absolute inset-0 bg-radial-gradient from-[#C9A84C]/20 via-transparent to-transparent opacity-90" />
                 
                 <div className="font-sans font-light text-3xl tracking-[0.3em] text-white z-10 group-hover:text-[#C9A84C] transition-colors relative">
                   IGNYT<span className="text-[#C9A84C]">.</span>CO
                 </div>
-                <div className="font-serif-cormorant italic text-base text-[#F0EBE3]/60 mt-3 z-10 tracking-widest group-hover:text-white/90 transition-colors relative">
+                <div className="font-serif-cormorant italic text-base text-[#F0EBE3]/70 mt-3 z-10 tracking-widest group-hover:text-white transition-colors relative">
                   We Spark The Night.
                 </div>
-                <div className="font-serif-cormorant italic text-[64px] text-[#C9A84C]/5 font-light absolute bottom-5 right-5 leading-none transition-all duration-500 group-hover:opacity-10">
+                
+                {/* Unclippable, unwrappable styled absolute background brand watermark */}
+                <div className="font-serif-cormorant italic text-[60px] text-[#C9A84C]/5 font-light absolute bottom-4 right-6 leading-none tracking-widest whitespace-nowrap select-none transition-all duration-500 group-hover:opacity-15">
                   IGNYT
                 </div>
               </a>
@@ -622,14 +624,14 @@ export default function App() {
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-10 py-10 border-b border-white/5 opacity-35 cursor-default select-none">
                 <div>
                   <div className="font-sans font-light text-[9px] tracking-[0.4em] text-white/50 uppercase mb-3">
-                    Coming Soon
+                    In Development
                   </div>
                   <h3 className="font-serif-cormorant font-light text-4xl md:text-5xl text-white tracking-wide mb-3">
-                    Winter Ball
+                    More Projects
                   </h3>
                   <div className="flex flex-wrap gap-x-6 mt-4 text-white/30 font-sans text-[10px] tracking-wider">
-                    <span>📍 Chandigarh & Around</span>
-                    <span>📅 Late 2026</span>
+                    <span>📍 Chandigarh & Beyond</span>
+                    <span>📅 Curating Premium Concepts</span>
                   </div>
                 </div>
               </div>
