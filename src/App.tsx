@@ -527,17 +527,26 @@ export default function App() {
                 href="https://instagram.com/ignyt.co" 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="border border-white/5 aspect-[3/4] flex flex-col items-center justify-center bg-[#0F0F0F] relative overflow-hidden group hover:border-[#C9A84C]/25 transition-all duration-300"
+                className="border border-white/5 aspect-[3/4] flex flex-col items-center justify-center bg-[#070707] relative overflow-hidden group hover:border-[#C9A84C]/25 transition-all duration-300 rounded"
               >
-                <div className="absolute inset-0 bg-radial-gradient from-[#C9A84C]/8 via-transparent to-transparent" />
-                <div className="font-sans font-light text-3xl tracking-[0.3em] text-white z-10 group-hover:text-[#C9A84C] transition-colors">
+                {/* Cinematic Background Image representing high-end spark and nightlife sessions */}
+                <div 
+                  className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1492684223066-81342ee5ff30?q=80&w=800&auto=format&fit=crop')] bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-30 group-hover:opacity-55"
+                  referrerPolicy="no-referrer"
+                />
+                
+                {/* Aesthetic Dark Overlay & Radial Glow */}
+                <div className="absolute inset-0 bg-[#0F0F0F]/60 group-hover:bg-[#0F0F0F]/45 transition-colors duration-500" />
+                <div className="absolute inset-0 bg-radial-gradient from-[#C9A84C]/15 via-transparent to-transparent" />
+                
+                <div className="font-sans font-light text-3xl tracking-[0.3em] text-white z-10 group-hover:text-[#C9A84C] transition-colors relative">
                   IGNYT<span className="text-[#C9A84C]">.</span>CO
                 </div>
-                <div className="font-serif-cormorant italic text-base text-[#F0EBE3]/40 mt-3 z-10 tracking-widest group-hover:text-white/60 transition-colors">
+                <div className="font-serif-cormorant italic text-base text-[#F0EBE3]/60 mt-3 z-10 tracking-widest group-hover:text-white/90 transition-colors relative">
                   We Spark The Night.
                 </div>
-                <div className="font-serif-cormorant italic text-[80px] text-[#C9A84C]/5 font-light absolute bottom-5 right-5 leading-none">
-                  IGN
+                <div className="font-serif-cormorant italic text-[64px] text-[#C9A84C]/5 font-light absolute bottom-5 right-5 leading-none transition-all duration-500 group-hover:opacity-10">
+                  IGNYT
                 </div>
               </a>
             </div>
@@ -616,11 +625,11 @@ export default function App() {
                     Coming Soon
                   </div>
                   <h3 className="font-serif-cormorant font-light text-4xl md:text-5xl text-white tracking-wide mb-3">
-                    Autumn Sessions
+                    Winter Ball
                   </h3>
                   <div className="flex flex-wrap gap-x-6 mt-4 text-white/30 font-sans text-[10px] tracking-wider">
-                    <span>📍 Chandigarh</span>
-                    <span>📅 Watch This Space</span>
+                    <span>📍 Chandigarh & Around</span>
+                    <span>📅 Late 2026</span>
                   </div>
                 </div>
               </div>
@@ -1279,7 +1288,13 @@ export default function App() {
           <p className="font-sans font-light text-sm text-[#F0EBE3]/60 leading-relaxed tracking-wider mb-10">
             Your spot has been earmarked for the legendary <strong className="text-white font-medium">Summer Pool Party</strong> by IGNYT Co.<br /><br />
             We have dispatched a notification summary to <strong className="text-[#C9A84C] font-normal">{registeredEmail}</strong>.<br />
-            Since tickets require confirmation of payment, make sure you uploaded the invoice screenshot inside the payment form. Parth Dua (<strong className="text-white font-normal">parthdua007@gmail.com</strong>) will check your submission against Google Form receipts and verify your seat shortly!<br /><br />
+            Since tickets require confirmation of payment, make sure you uploaded the invoice screenshot inside the payment form. Our organizers will check your submission against Google Form receipts and verify your seat shortly!<br /><br />
+            <span className="block border border-white/5 bg-[#0F0F0F] p-4 rounded text-xs text-[#F0EBE3]/80 mb-4 text-left font-sans">
+              <strong>Need instant assistance? Contact Organizer:</strong><br />
+              📞 Phone: <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a><br />
+              ✉️ Email: <a href="mailto:ignyt@ignyt.co.in" className="text-[#C9A84C] hover:underline">ignyt@ignyt.co.in</a><br />
+              📸 Instagram: <a href="https://instagram.com/ignyt.co" target="_blank" rel="noopener noreferrer" className="text-[#C9A84C] hover:underline">@ignyt.co</a>
+            </span>
             Follow <strong className="text-[#C9A84C]">@ignyt.co</strong> on Instagram to catch direct updates on specific announcements!
           </p>
 
@@ -1584,6 +1599,10 @@ export default function App() {
                   <strong className="text-white block text-sm font-semibold tracking-wide select-all mt-1 pointer-events-auto bg-black/40 py-2.5 rounded border border-white/[0.03]">
                     parthdua70-3@okicici
                   </strong>
+                </div>
+
+                <div className="font-sans text-[9px] text-[#F0EBE3]/40 tracking-wide mb-5">
+                  ⚠️ Having trouble billing or checking out? Contact Organizer: <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a> (Call / WhatsApp) or email <a href="mailto:ignyt@ignyt.co.in" className="text-[#C9A84C] hover:underline">ignyt@ignyt.co.in</a>
                 </div>
 
                 <div className="w-10 h-[1.5px] bg-[#C9A84C]/30 mx-auto mb-6" />

@@ -4,7 +4,6 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
-import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
@@ -130,11 +129,10 @@ app.use(express.json());
 
 export { app };
 
-async function startServer() {
-  // API: Health / Ping
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString() });
-  });
+// API: Health / Ping
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
 
   // API: Add Registration
   app.post('/api/register', async (req, res) => {
@@ -309,6 +307,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
+async function startServer() {
   if (process.env.VERCEL) {
     return;
   }
@@ -321,7 +320,8 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
-    // Development Mode
+    // Development Mode with lazy dynamic import of vite to prevent bundling failures in Vercel
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'custom',
