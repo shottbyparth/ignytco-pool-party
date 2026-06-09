@@ -1,0 +1,6 @@
+{
+  "name": "IGNYT.CO — Summer Pool Party",
+  "description": "Premium event registration and ticketing system for IGNYT Co.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
