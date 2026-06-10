@@ -281,20 +281,92 @@ export default function App() {
     return Object.keys(errors).length === 0;
   };
 
-  // File screenshot handler helper
+  // File screenshot handler helper with client-side compression to prevent 413 Payload Too Large & Firestore document limit issues
   const handleScreenshotChange = (file: File) => {
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      alert("Screenshot file size should be less than 8MB");
+    
+    // We can support up to 20MB files now because we will compress them client-side immediately
+    if (file.size > 20 * 1024 * 1024) {
+      alert("Screenshot file size should be less than 20MB");
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setScreenshotBase64(reader.result as string);
-      setScreenshotName(file.name);
-      setSubmittedProof(true);
+
+    // Set temporary label indicating optimization progress
+    setScreenshotName(file.name + " (Optimizing...)");
+
+    const maxW = 1000;
+    const maxH = 1000;
+    const quality = 0.7;
+
+    const doCompression = () => {
+      if (!file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          setScreenshotBase64(reader.result as string);
+          setScreenshotName(file.name);
+          setSubmittedProof(true);
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxW) {
+          height = Math.round((height * maxW) / width);
+          width = maxW;
+        }
+        if (height > maxH) {
+          width = Math.round((width * maxH) / height);
+          height = maxH;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          // Fallback to plain reader
+          const reader = new FileReader();
+          reader.onload = () => {
+            setScreenshotBase64(reader.result as string);
+            setScreenshotName(file.name);
+            setSubmittedProof(true);
+          };
+          reader.readAsDataURL(file);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        setScreenshotBase64(dataUrl);
+        setScreenshotName(file.name);
+        setSubmittedProof(true);
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        // Fallback to plain reader
+        const reader = new FileReader();
+        reader.onload = () => {
+          setScreenshotBase64(reader.result as string);
+          setScreenshotName(file.name);
+          setSubmittedProof(true);
+        };
+        reader.readAsDataURL(file);
+      };
+
+      img.src = objectUrl;
     };
-    reader.readAsDataURL(file);
+
+    doCompression();
   };
 
   // Trigger Registration flow
