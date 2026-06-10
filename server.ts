@@ -507,15 +507,16 @@ export { app };
 
 // ─── RAZORPAY SETUP ───────────────────────────────────────────
 let razorpayInstance: any = null;
-function getRazorpay() {
+async function getRazorpay() {
   if (!razorpayInstance) {
     const keyId = process.env.RAZORPAY_KEY_ID;
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
     if (!keyId || !keySecret) {
       throw new Error('Razorpay keys missing in environment variables.');
     }
-    // Lazy require so any import issue is contained to the payment route only
-    const Razorpay = require('razorpay');
+    // Dynamic import so it's ESM-safe and contained to the payment route only
+    const RazorpayModule: any = await import('razorpay');
+    const Razorpay = RazorpayModule.default || RazorpayModule;
     razorpayInstance = new Razorpay({ key_id: keyId, key_secret: keySecret });
   }
   return razorpayInstance;
@@ -528,7 +529,7 @@ app.post('/api/create-order', async (req, res) => {
     if (!amount || amount < 100) {
       return res.status(400).json({ error: 'Invalid amount.' });
     }
-    const rzp = getRazorpay();
+    const rzp = await getRazorpay();
     const order = await rzp.orders.create({
       amount: Math.round(amount * 100), // rupees → paise
       currency: 'INR',
