@@ -247,8 +247,20 @@ export default function App() {
     if (!formData.gender) errors.gender = 'Gender selection is required';
     
     const phoneClean = formData.phone.trim();
-    if (!phoneClean || phoneClean.length < 8) {
-      errors.phone = 'Valid phone number is required';
+    const phoneDigits = phoneClean.replace(/\D/g, '');
+    let isValidPhone = false;
+    if (phoneDigits.length === 12 && phoneDigits.startsWith('91')) {
+      isValidPhone = true;
+    } else if (phoneDigits.length === 11 && phoneDigits.startsWith('0')) {
+      isValidPhone = true;
+    } else if (phoneDigits.length === 10) {
+      isValidPhone = true;
+    }
+
+    if (!phoneClean) {
+      errors.phone = 'Phone number is required';
+    } else if (!isValidPhone) {
+      errors.phone = 'Please enter a valid 10-digit mobile number';
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -360,11 +372,13 @@ export default function App() {
         setCurrentTab('success');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else {
-        alert('Could not submit details, please try again.');
+        const errorData = await res.json().catch(() => ({}));
+        const serverError = errorData.error || 'Could not submit details, please try again.';
+        alert(serverError);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Submission failed:', err);
-      alert('Error connecting to registration engine. Please retry.');
+      alert(`Error connecting to registration engine: ${err.message || err}`);
     } finally {
       setSubmittingRegistration(false);
     }

@@ -14,12 +14,25 @@ const __dirname = path.dirname(__filename);
 
 const REGISTRATIONS_FILE = path.resolve(process.cwd(), 'registrations.json');
 
-// Load Firebase configuration
+// Load Firebase configuration with multiple fallbacks
 let firebaseConfig: any = {};
 try {
-  const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
-  if (fs.existsSync(configPath)) {
-    firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  const pathsToTry = [
+    path.resolve(process.cwd(), 'firebase-applet-config.json'),
+    path.resolve(__dirname, 'firebase-applet-config.json'),
+    path.resolve(__dirname, '../firebase-applet-config.json'),
+  ];
+  let loaded = false;
+  for (const configPath of pathsToTry) {
+    if (fs.existsSync(configPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      loaded = true;
+      console.log(`📡 Loaded Firebase configuration from: ${configPath}`);
+      break;
+    }
+  }
+  if (!loaded) {
+    console.error('⚠️ Could not find firebase-applet-config.json in any fallback path!');
   }
 } catch (err) {
   console.error('Error reading firebase config file:', err);
@@ -29,7 +42,7 @@ let db: any = null;
 function getDb() {
   if (!db) {
     if (!firebaseConfig.projectId) {
-      throw new Error('Firebase configuration is missing or invalid.');
+      throw new Error('Firebase configuration (projectId) is missing or invalid in server.ts.');
     }
     const app = initializeApp(firebaseConfig);
     db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -355,153 +368,187 @@ app.get('/api/health', (req, res) => {
 
   // API: Add Registration
   app.post('/api/register', async (req, res) => {
-    const {
-      firstName,
-      lastName,
-      age,
-      gender,
-      phone,
-      email,
-      city,
-      instagram,
-      heardFrom,
-      dietary,
-      ticket,
-      transactionId,
-      screenshotImage
-    } = req.body;
-
-    if (!firstName || !lastName || !email || !phone || !ticket) {
-      return res.status(400).json({ error: 'Missing mandatory fields' });
-    }
-
-    const newRecord: Registration = {
-      id: 'reg_' + Math.random().toString(36).substr(2, 9),
-      firstName,
-      lastName,
-      age: Number(age),
-      gender,
-      phone,
-      email,
-      city,
-      instagram: instagram || 'Not shared',
-      heardFrom,
-      dietary: dietary || 'No restrictions',
-      ticket,
-      status: 'Pending Verification',
-      timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-      transactionId: transactionId || 'Not provided',
-      screenshotImage: screenshotImage || ''
-    };
-
     try {
-      const dbInstance = getDb();
-      await setDoc(doc(dbInstance, 'registrations', newRecord.id), newRecord);
-    } catch (dbErr) {
-      console.error('Failed to save registration to Firestore:', dbErr);
+      const {
+        firstName,
+        lastName,
+        age,
+        gender,
+        phone,
+        email,
+        city,
+        instagram,
+        heardFrom,
+        dietary,
+        ticket,
+        transactionId,
+        screenshotImage
+      } = req.body;
+
+      // Detailed validation of mandatory fields
+      const missingFields = [];
+      if (!firstName) missingFields.push('First Name');
+      if (!lastName) missingFields.push('Last Name');
+      if (!email) missingFields.push('Email Address');
+      if (!phone) missingFields.push('Phone Number');
+      if (!ticket) missingFields.push('Ticket Category');
+
+      if (missingFields.length > 0) {
+        return res.status(400).json({ error: `Missing mandatory file fields: ${missingFields.join(', ')}` });
+      }
+
+      // Phone number validation: must resolve to exactly 10 digits
+      const digits = (phone || '').replace(/\D/g, '');
+      let isValidPhone = false;
+      if (digits.length === 12 && digits.startsWith('91')) {
+        isValidPhone = true;
+      } else if (digits.length === 11 && digits.startsWith('0')) {
+        isValidPhone = true;
+      } else if (digits.length === 10) {
+        isValidPhone = true;
+      }
+
+      if (!isValidPhone) {
+        return res.status(400).json({ error: 'Invalid phone number. Please enter a valid 10-digit mobile number.' });
+      }
+
+      const newRecord: Registration = {
+        id: 'reg_' + Math.random().toString(36).substr(2, 9),
+        firstName,
+        lastName,
+        age: Number(age) || 0,
+        gender: gender || 'Not selected',
+        phone,
+        email,
+        city: city || 'Not provided',
+        instagram: instagram || 'Not shared',
+        heardFrom: heardFrom || 'Not specified',
+        dietary: dietary || 'No restrictions',
+        ticket,
+        status: 'Pending Verification',
+        timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        transactionId: transactionId || 'Not provided',
+        screenshotImage: screenshotImage || ''
+      };
+
+      // Attempt to save to database - throw error up if Firestore fails
+      try {
+        const dbInstance = getDb();
+        await setDoc(doc(dbInstance, 'registrations', newRecord.id), newRecord);
+      } catch (dbErr: any) {
+        console.error('Failed to save registration to Firestore:', dbErr);
+        throw new Error(`Database transaction failed: ${dbErr.message || dbErr}`);
+      }
+
+      // Dynamic origin calculation for correct link back redirecting
+      let origin = req.get('origin') || '';
+      if (!origin && req.get('host')) {
+        const host = req.get('host') || '';
+        const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+        const protocol = isLocal ? 'http' : 'https';
+        origin = `${protocol}://${host}`;
+      }
+      if (!origin) {
+        origin = 'https://ignyt.co.in';
+      }
+
+      // 📩 Trigger Email to User: Pending Verification
+      const userSubject = `Registration Received — Summer Pool Party 🏊‍♂️ (IGNYT Co.)`;
+      const userBody = `Hi ${firstName},\n\n` +
+        `Your registration for the Summer Pool Party (IGNYT Co.) has been successfully submitted!\n\n` +
+        `🎟️ TICKET DETAIL: ${ticket}\n` +
+        `📍 VENUE: Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali\n` +
+        `📅 DATE: Saturday, 13 June\n` +
+        `🕗 TIME: 8:00 PM Onwards\n` +
+        `👔 DRESS CODE: All Black + Neon accessories\n` +
+        `🍹 INCLUSION: Complimentary food and drink included (BYOB welcome)\n\n` +
+        `⚠️ IMPORTANT: NEXT STEPS\n` +
+        `--------------------------------------------------\n` +
+        `Since payments are handled via UPI, your ticket remains PENDING VERIFICATION.\n` +
+        `We have secured your uploaded payment proof and UPI Sender Name/ID (${newRecord.transactionId}) in our records.\n\n` +
+        `Our review team (email contact/owner: parthdua007@gmail.com or ignyt@ignyt.co.in) will verify your submission.\n` +
+        `Once payment is confirmed, we will send you your official check-in ticket ID immediately.\n\n` +
+        `See you soon!\n` +
+        `— IGNYT Co. Team\n` +
+        `${origin}`;
+
+      const userHtml = buildHtmlEmail(
+        'Registration Received — IGNYT Co.',
+        'Your pool party registration is pending verification.',
+        `
+        <div class="badge-pending">Status: Pending Verification</div>
+        <h1>Hi ${firstName},</h1>
+        <p>Your registration for the legendary <a href="${origin}" style="color: #C9A84C; text-decoration: none; font-weight: 600;">IGNYT.CO</a> <strong>Summer Pool Party</strong> has been successfully received and is currently under review.</p>
+        
+        <div class="specs-grid">
+          <div class="spec-row">
+            <div class="spec-label">Ticket Choice</div>
+            <div class="spec-value">${ticket}</div>
+          </div>
+          <div class="spec-row">
+            <div class="spec-label">Venue Location</div>
+            <div class="spec-value">Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali</div>
+          </div>
+          <div class="spec-row">
+            <div class="spec-label">Date of Event</div>
+            <div class="spec-value font-bold text-[#C9A84C]">Saturday, 13 June</div>
+          </div>
+          <div class="spec-row">
+            <div class="spec-label">Time</div>
+            <div class="spec-value">8:00 PM Onwards</div>
+          </div>
+          <div class="spec-row">
+            <div class="spec-label">Dress Code</div>
+            <div class="spec-value">All Black + Neon accessories</div>
+          </div>
+          <div class="spec-row">
+            <div class="spec-label">Inclusions</div>
+            <div class="spec-value">Complimentary food and drink included (BYOB welcome, welcome drink provided)</div>
+          </div>
+        </div>
+        
+        <h3 style="color: #C9A84C; font-weight: 500; font-size: 15px; margin-top: 24px; text-transform: uppercase; letter-spacing: 0.05em;">⚠️ Next Step: Payment Matching</h3>
+        <p>Since checkout payment is validated via custom UPI receipt statement inspection, our review team will match your submitted UPI Sender Name/ID (<strong>${transactionId}</strong>) against our bank reference statements shortly.</p>
+        <p>As soon as payment matches, your access ticket containing a secure check-in ID will be delivered directly to your inbox.</p>
+        
+        <div class="button-container">
+          <a href="${origin}" class="btn" target="_blank">View Website</a>
+        </div>
+        `,
+        origin
+      );
+
+      // 📩 Trigger Email to Organizer: New Pending Attendee Notification
+      const orgSubject = `🚨 New Registration Pending: ${firstName} ${lastName}`;
+      const orgBody = `Hey Organizer,\n\n` +
+        `A new registrant has claimed payment for the Summer Pool Party:\n\n` +
+        `👤 NAME: ${firstName} ${lastName}\n` +
+        `📧 EMAIL: ${email}\n` +
+        `📞 PHONE: ${phone}\n` +
+        `🎟️ TICKET: ${ticket}\n` +
+        `🏙️ CITY: ${city}\n` +
+        `📸 INSTAGRAM: ${instagram || 'Not shared'}\n` +
+        `💬 DIETARY: ${dietary}\n` +
+        `⚡ HEARD FROM: ${heardFrom}\n` +
+        `💳 TRANSACTION REF ID: ${newRecord.transactionId || 'Not provided'}\n` +
+        `⏳ TIME: ${newRecord.timestamp}\n\n` +
+        `Please check the Admin Dashboard or check the payment record against your UPI statement for ${email}'s transaction ID: ${newRecord.transactionId}.\n` +
+        `Once verified, log in to the admin panel and confirm their registration.`;
+
+      // Fire emails using background triggers safely
+      try {
+        await triggerEmail(email, userSubject, userBody, userHtml);
+        await triggerEmail('parthdua007@gmail.com', orgSubject, orgBody);
+        await triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody);
+      } catch (emailErr) {
+        console.error('Non-blocking Email trigger failure:', emailErr);
+      }
+
+      res.json({ success: true, registration: newRecord });
+    } catch (err: any) {
+      console.error('Detailed core exception inside app.post(/api/register):', err);
+      res.status(500).json({ error: err.message || 'Internal server registration failure.' });
     }
-
-    // Dynamic origin calculation for correct link back redirecting
-    let origin = req.get('origin') || '';
-    if (!origin && req.get('host')) {
-      const host = req.get('host') || '';
-      const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
-      const protocol = isLocal ? 'http' : 'https';
-      origin = `${protocol}://${host}`;
-    }
-    if (!origin) {
-      origin = 'https://ignyt.co.in';
-    }
-
-    // 📩 Trigger Email to User: Pending Verification
-    const userSubject = `Registration Received — Summer Pool Party 🏊‍♂️ (IGNYT Co.)`;
-    const userBody = `Hi ${firstName},\n\n` +
-      `Your registration for the Summer Pool Party (IGNYT Co.) has been successfully submitted!\n\n` +
-      `🎟️ TICKET DETAIL: ${ticket}\n` +
-      `📍 VENUE: Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali\n` +
-      `📅 DATE: Saturday, 13 June\n` +
-      `🕗 TIME: 8:00 PM Onwards\n` +
-      `👔 DRESS CODE: All Black + Neon accessories\n` +
-      `🍹 INCLUSION: Complimentary food and drink included (BYOB welcome)\n\n` +
-      `⚠️ IMPORTANT: NEXT STEPS\n` +
-      `--------------------------------------------------\n` +
-      `Since payments are handled via UPI, your ticket remains PENDING VERIFICATION.\n` +
-      `We have secured your uploaded payment proof and UPI Sender Name/ID (${newRecord.transactionId}) in our records.\n\n` +
-      `Our review team (email contact/owner: parthdua007@gmail.com or ignyt@ignyt.co.in) will verify your submission.\n` +
-      `Once payment is confirmed, we will send you your official check-in ticket ID immediately.\n\n` +
-      `See you soon!\n` +
-      `— IGNYT Co. Team\n` +
-      `${origin}`;
-
-    const userHtml = buildHtmlEmail(
-      'Registration Received — IGNYT Co.',
-      'Your pool party registration is pending verification.',
-      `
-      <div class="badge-pending">Status: Pending Verification</div>
-      <h1>Hi ${firstName},</h1>
-      <p>Your registration for the legendary <a href="${origin}" style="color: #C9A84C; text-decoration: none; font-weight: 600;">IGNYT.CO</a> <strong>Summer Pool Party</strong> has been successfully received and is currently under review.</p>
-      
-      <div class="specs-grid">
-        <div class="spec-row">
-          <div class="spec-label">Ticket Choice</div>
-          <div class="spec-value">${ticket}</div>
-        </div>
-        <div class="spec-row">
-          <div class="spec-label">Venue Location</div>
-          <div class="spec-value">Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali</div>
-        </div>
-        <div class="spec-row">
-          <div class="spec-label">Date of Event</div>
-          <div class="spec-value">Saturday, 13 June</div>
-        </div>
-        <div class="spec-row">
-          <div class="spec-label">Time</div>
-          <div class="spec-value">8:00 PM Onwards</div>
-        </div>
-        <div class="spec-row">
-          <div class="spec-label">Dress Code</div>
-          <div class="spec-value">All Black + Neon accessories</div>
-        </div>
-        <div class="spec-row">
-          <div class="spec-label">Inclusions</div>
-          <div class="spec-value">Complimentary food and drink included (BYOB welcome, welcome drink provided)</div>
-        </div>
-      </div>
-      
-      <h3 style="color: #C9A84C; font-weight: 500; font-size: 15px; margin-top: 24px; text-transform: uppercase; letter-spacing: 0.05em;">⚠️ Next Step: Payment Matching</h3>
-      <p>Since checkout payment is validated via custom UPI receipt statement inspection, our review team will match your submitted UPI Sender Name/ID (<strong>${transactionId}</strong>) against our bank reference statements shortly.</p>
-      <p>As soon as payment matches, your access ticket containing a secure check-in ID will be delivered directly to your inbox.</p>
-      
-      <div class="button-container">
-        <a href="${origin}" class="btn" target="_blank">View Website</a>
-      </div>
-      `,
-      origin
-    );
-
-    // 📩 Trigger Email to Organizer: New Pending Attendee Notification
-    const orgSubject = `🚨 New Registration Pending: ${firstName} ${lastName}`;
-    const orgBody = `Hey Organizer,\n\n` +
-      `A new registrant has claimed payment for the Summer Pool Party:\n\n` +
-      `👤 NAME: ${firstName} ${lastName}\n` +
-      `📧 EMAIL: ${email}\n` +
-      `📞 PHONE: ${phone}\n` +
-      `🎟️ TICKET: ${ticket}\n` +
-      `🏙️ CITY: ${city}\n` +
-      `📸 INSTAGRAM: ${instagram || 'Not shared'}\n` +
-      `💬 DIETARY: ${dietary}\n` +
-      `⚡ HEARD FROM: ${heardFrom}\n` +
-      `💳 TRANSACTION REF ID: ${newRecord.transactionId || 'Not provided'}\n` +
-      `⏳ TIME: ${newRecord.timestamp}\n\n` +
-      `Please check the Admin Dashboard or check the payment record against your UPI statement for ${email}'s transaction ID: ${newRecord.transactionId}.\n` +
-      `Once verified, log in to the admin panel and confirm their registration.`;
-
-    // Fire emails
-    await triggerEmail(email, userSubject, userBody, userHtml);
-    await triggerEmail('parthdua007@gmail.com', orgSubject, orgBody);
-    await triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody);
-
-    res.json({ success: true, registration: newRecord });
   });
 
   // API: Admin Fetch Registrations
