@@ -8,7 +8,7 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { GoogleGenAI } from '@google/genai';
 import crypto from 'crypto';
-import Razorpay from 'razorpay';
+// Razorpay is imported lazily inside getRazorpay() to avoid bundler crash on cold start
 
 const firebaseConfigStatic = {
   projectId: "teak-dialect-t71nt",
@@ -506,7 +506,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 export { app };
 
 // ─── RAZORPAY SETUP ───────────────────────────────────────────
-let razorpayInstance: Razorpay | null = null;
+let razorpayInstance: any = null;
 function getRazorpay() {
   if (!razorpayInstance) {
     const keyId = process.env.RAZORPAY_KEY_ID;
@@ -514,6 +514,8 @@ function getRazorpay() {
     if (!keyId || !keySecret) {
       throw new Error('Razorpay keys missing in environment variables.');
     }
+    // Lazy require so any import issue is contained to the payment route only
+    const Razorpay = require('razorpay');
     razorpayInstance = new Razorpay({ key_id: keyId, key_secret: keySecret });
   }
   return razorpayInstance;
