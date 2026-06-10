@@ -6,7 +6,16 @@ import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
-import firebaseConfigStatic from './firebase-applet-config.json';
+const firebaseConfigStatic = {
+  projectId: "teak-dialect-t71nt",
+  appId: "1:603740095570:web:ae1e82c9b3b7c95bf38b8b",
+  apiKey: "AIzaSyAWieGmCeOz-WdHxf_vKxyNKrX_ipFH90I",
+  authDomain: "teak-dialect-t71nt.firebaseapp.com",
+  firestoreDatabaseId: "ai-studio-6942d811-b64e-4057-ab08-f75c3dd0e292",
+  storageBucket: "teak-dialect-t71nt.firebasestorage.app",
+  messagingSenderId: "603740095570",
+  measurementId: ""
+};
 
 dotenv.config();
 
@@ -16,7 +25,7 @@ const __dirname = path.dirname(__filename);
 const REGISTRATIONS_FILE = path.resolve(process.cwd(), 'registrations.json');
 
 // Load Firebase configuration with multiple fallbacks
-let firebaseConfig: any = {};
+let firebaseConfig: any = { ...firebaseConfigStatic };
 try {
   const pathsToTry = [
     path.resolve(process.cwd(), 'firebase-applet-config.json'),
@@ -26,21 +35,18 @@ try {
   let loaded = false;
   for (const configPath of pathsToTry) {
     if (fs.existsSync(configPath)) {
-      firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      loaded = true;
-      console.log(`📡 Loaded Firebase configuration from: ${configPath}`);
-      break;
+      const fileData = fs.readFileSync(configPath, 'utf-8');
+      if (fileData && fileData.trim()) {
+        const dynamicConfig = JSON.parse(fileData);
+        firebaseConfig = { ...firebaseConfig, ...dynamicConfig };
+        loaded = true;
+        console.log(`📡 Loaded Firebase configuration from: ${configPath}`);
+        break;
+      }
     }
-  }
-  if (!loaded) {
-    console.warn('⚠️ Could not find firebase-applet-config.json in any filesystem path! Using static import fallback...');
-    firebaseConfig = firebaseConfigStatic;
-  } else {
-    firebaseConfig = { ...firebaseConfigStatic, ...firebaseConfig };
   }
 } catch (err) {
   console.error('Error reading firebase config file:', err);
-  firebaseConfig = firebaseConfigStatic;
 }
 
 let db: any = null;
@@ -129,7 +135,10 @@ function getTransporter() {
     },
     tls: {
       rejectUnauthorized: false
-    }
+    },
+    connectionTimeout: 2500, // 2.5s connection timeout to fail early if SMTP port is blocked
+    greetingTimeout: 2000,   // 2s greeting message timeout
+    socketTimeout: 5000,     // 5s idle socket timeout
   });
 }
 
@@ -362,17 +371,9 @@ async function triggerEmail(to: string, subject: string, body: string, htmlBody?
 
 const app = express();
 
-// Gracefully handle body parsing inside Vercel Serverless environment without stream hanging
-app.use((req, res, next) => {
-  if (process.env.VERCEL && req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
-    next();
-  } else {
-    express.json({ limit: '10mb' })(req, res, (err) => {
-      if (err) return next(err);
-      express.urlencoded({ limit: '10mb', extended: true })(req, res, next);
-    });
-  }
-});
+// Parse JSON and urlencoded request payloads cleanly using standard Express parsers
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 export { app };
 
@@ -550,11 +551,13 @@ app.get('/api/health', (req, res) => {
         `Please check the Admin Dashboard or check the payment record against your UPI statement for ${email}'s transaction ID: ${newRecord.transactionId}.\n` +
         `Once verified, log in to the admin panel and confirm their registration.`;
 
-      // Fire emails using background triggers safely
+      // Fire emails concurrently in parallel to prevent SMTP connection delay timeouts on serverless functions
       try {
-        await triggerEmail(email, userSubject, userBody, userHtml);
-        await triggerEmail('parthdua007@gmail.com', orgSubject, orgBody);
-        await triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody);
+        await Promise.allSettled([
+          triggerEmail(email, userSubject, userBody, userHtml),
+          triggerEmail('parthdua007@gmail.com', orgSubject, orgBody),
+          triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody)
+        ]);
       } catch (emailErr) {
         console.error('Non-blocking Email trigger failure:', emailErr);
       }
@@ -745,8 +748,14 @@ app.get('/api/health', (req, res) => {
       `💬 MESSAGE:\n${message || 'No message entered.'}\n\n` +
       `Please respond promptly to retain client interest.\n`;
 
-    await triggerEmail('ignyt@ignyt.co.in', contactSubject, contactBody);
-    await triggerEmail('parthdua007@gmail.com', contactSubject, contactBody);
+    try {
+      await Promise.allSettled([
+        triggerEmail('ignyt@ignyt.co.in', contactSubject, contactBody),
+        triggerEmail('parthdua007@gmail.com', contactSubject, contactBody)
+      ]);
+    } catch (emailErr) {
+      console.error('Non-blocking Contact Email trigger failure:', emailErr);
+    }
 
     res.json({ success: true });
   });
