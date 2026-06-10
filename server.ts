@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import firebaseConfigStatic from './firebase-applet-config.json';
 
 dotenv.config();
 
@@ -32,10 +33,14 @@ try {
     }
   }
   if (!loaded) {
-    console.error('⚠️ Could not find firebase-applet-config.json in any fallback path!');
+    console.warn('⚠️ Could not find firebase-applet-config.json in any filesystem path! Using static import fallback...');
+    firebaseConfig = firebaseConfigStatic;
+  } else {
+    firebaseConfig = { ...firebaseConfigStatic, ...firebaseConfig };
   }
 } catch (err) {
   console.error('Error reading firebase config file:', err);
+  firebaseConfig = firebaseConfigStatic;
 }
 
 let db: any = null;
@@ -356,8 +361,18 @@ async function triggerEmail(to: string, subject: string, body: string, htmlBody?
 }
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// Gracefully handle body parsing inside Vercel Serverless environment without stream hanging
+app.use((req, res, next) => {
+  if (process.env.VERCEL && req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    next();
+  } else {
+    express.json({ limit: '10mb' })(req, res, (err) => {
+      if (err) return next(err);
+      express.urlencoded({ limit: '10mb', extended: true })(req, res, next);
+    });
+  }
+});
 
 export { app };
 
