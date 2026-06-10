@@ -40,6 +40,15 @@ interface Registration {
   ticket: string;
   status: 'Pending Verification' | 'Verified';
   timestamp: string;
+  transactionId?: string;
+  screenshotImage?: string;
+  // --- New AI Pre-Verification Fields ---
+  aiVerified?: boolean;
+  aiExtractedTransactionId?: string;
+  aiExtractedAmount?: number;
+  aiExtractedSenderName?: string;
+  aiVerificationStatus?: 'verified' | 'unclear' | 'invalid' | 'not_analyzed';
+  aiFeedback?: string;
 }
 
 export default function App() {
@@ -95,6 +104,7 @@ export default function App() {
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [submittingRegistration, setSubmittingRegistration] = useState(false);
   const [submittedProof, setSubmittedProof] = useState(false);
+  const [bypassUpload, setBypassUpload] = useState(false);
   const [transactionId, setTransactionId] = useState('');
   const [screenshotBase64, setScreenshotBase64] = useState('');
   const [screenshotName, setScreenshotName] = useState('');
@@ -386,8 +396,8 @@ export default function App() {
 
   // Save Registration details from inline proof and claim payment
   const handleConfirmDonePaymentProof = async () => {
-    if (!submittedProof) {
-      alert("Please upload your payment screenshot/proof first to complete registration!");
+    if (!submittedProof && !bypassUpload) {
+      alert("Please upload your payment screenshot or check the alternative bypass option to complete registration!");
       return;
     }
     if (!transactionId.trim()) {
@@ -423,6 +433,7 @@ export default function App() {
         setRegisteredEmail(formData.email);
         setIsModalOpen(false);
         setSubmittedProof(false);
+        setBypassUpload(false);
         setTransactionId('');
         setScreenshotBase64('');
         setScreenshotName('');
@@ -1636,15 +1647,15 @@ export default function App() {
                               </div>
                             )}
                             {r.screenshotImage ? (
-                              <div className="mt-1.5 flex items-center gap-1.5">
-                                <span className="text-[9px] text-[#F0EBE3]/40 font-sans">Screenshot:</span>
+                              <div className="mt-1.5 flex items-center gap-1.5 font-sans">
+                                <span className="text-[9px] text-[#F0EBE3]/40">Screenshot:</span>
                                 <button
                                   type="button"
                                   onClick={() => {
                                     const w = window.open();
                                     w?.document.write(`<img src="${r.screenshotImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
                                   }}
-                                  className="text-[9px] text-white underline hover:text-[#C9A84C] font-sans cursor-pointer"
+                                  className="text-[9px] text-white underline hover:text-[#C9A84C] cursor-pointer"
                                 >
                                   View Proof ↗
                                 </button>
@@ -1652,7 +1663,44 @@ export default function App() {
                             ) : (
                               <div className="text-[8px] text-[#F0EBE3]/20 font-sans mt-1">No screenshot</div>
                             )}
-                            <div className="font-sans text-[9px] text-[#F0EBE3]/25 tracking-wider mt-1 block">Diet: {r.dietary}</div>
+                            
+                            {/* --- New AI pre-verification card display --- */}
+                            {r.aiVerificationStatus && r.aiVerificationStatus !== 'not_analyzed' && (
+                              <div className="mt-2.5 p-2 bg-[#0F0F0F] border border-white/5 rounded text-[10px] space-y-0.5 max-w-[240px]">
+                                <div className="flex items-center gap-1 font-sans font-semibold tracking-wider text-[8px] uppercase text-[#C9A84C] mb-1">
+                                  <span className="w-1 h-1 rounded-full bg-[#C9A84C]" />
+                                  AI Pre-screening Check
+                                </div>
+                                <div className="font-sans text-[#F0EBE3]/60 text-[9.5px]">
+                                  Verdict: <span className={`font-semibold uppercase tracking-wider text-[9px] ${
+                                    r.aiVerificationStatus === 'verified' ? 'text-green-400' :
+                                    r.aiVerificationStatus === 'unclear' ? 'text-orange-400' : 'text-red-400'
+                                  }`}>{r.aiVerificationStatus}</span>
+                                </div>
+                                {r.aiExtractedTransactionId && (
+                                  <div className="font-mono text-[9px] text-[#F0EBE3]/55 truncate">
+                                    Ref/UTR: <span className="text-[#F0EBE3]/85">{r.aiExtractedTransactionId}</span>
+                                  </div>
+                                )}
+                                {r.aiExtractedAmount !== undefined && (
+                                  <div className="font-sans text-[9px] text-[#F0EBE3]/55">
+                                    Amount: <span className="font-semibold text-[#C9A84C]">Rs. {r.aiExtractedAmount}</span>
+                                  </div>
+                                )}
+                                {r.aiExtractedSenderName && (
+                                  <div className="font-sans text-[9px] text-[#F0EBE3]/55 truncate">
+                                    Sender: <span className="text-[#F0EBE3]/80">{r.aiExtractedSenderName}</span>
+                                  </div>
+                                )}
+                                {r.aiFeedback && (
+                                  <div className="text-[9px] text-[#C9A84C]/90 italic mt-1 font-sans leading-relaxed border-t border-white/5 pt-1">
+                                    "{r.aiFeedback}"
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="font-sans text-[9px] text-[#F0EBE3]/25 tracking-wider mt-1.5 block">Diet: {r.dietary}</div>
                           </td>
                           <td className="p-4">
                             <span className={`inline-block font-sans text-[8px] tracking-widest uppercase px-2.5 py-1 rounded-sm border ${
@@ -1876,6 +1924,29 @@ export default function App() {
                         <p className="font-sans text-[10px] text-[#F0EBE3]/40 mt-1">PNG, JPG, JPEG formats are fully supported</p>
                       </div>
                     )}
+
+                    {/* Highly-Reliable Client Backup Option for Mobile/Stalling Upload Errors */}
+                    <div className="mt-3.5 p-3.5 bg-white/[0.01] border border-white/5 rounded-md flex items-start gap-3">
+                      <input 
+                        type="checkbox" 
+                        id="bypass_upload"
+                        className="mt-1 accent-[#C9A84C] h-4 w-4 rounded border-white/20 bg-[#121212] text-[#C9A84C] focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                        checked={bypassUpload}
+                        onChange={e => {
+                          setBypassUpload(e.target.checked);
+                          if (e.target.checked) {
+                            setScreenshotBase64('');
+                            setScreenshotName('');
+                            setSubmittedProof(false);
+                          }
+                        }}
+                      />
+                      <label htmlFor="bypass_upload" className="font-sans text-[10.5px] cursor-pointer text-[#F0EBE3]/70 select-none leading-relaxed">
+                        <span className="text-[#C9A84C] font-semibold block mb-0.5">⚠️ No Screenshot? Mobile Upload Issue?</span>
+                        Check this box to submit without attaching an image. Our review team will manually verify using the <strong className="text-[#C9A84C]">UPI Name / Receipt Code</strong> provided above.
+                      </label>
+                    </div>
+
                   </div>
                 </div>
 
@@ -1895,7 +1966,7 @@ export default function App() {
                   </button>
                   <button 
                     onClick={handleConfirmDonePaymentProof}
-                    disabled={submittingRegistration || !submittedProof || !transactionId.trim()}
+                    disabled={submittingRegistration || (!submittedProof && !bypassUpload) || !transactionId.trim()}
                     className="w-2/3 bg-[#C9A84C] text-black font-sans text-[9.5px] tracking-[0.25em] h-[50px] uppercase hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all flex items-center justify-center disabled:opacity-30 disabled:hover:bg-[#C9A84C] disabled:hover:text-black cursor-pointer disabled:cursor-not-allowed"
                   >
                     {submittingRegistration ? 'Securing Pass...' : '✓ Done & Claim Ticket'}

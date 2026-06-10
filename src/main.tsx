@@ -53,7 +53,11 @@ if (typeof window !== 'undefined') {
     // Keep prototypes aligned where possible
     CustomWebSocket.prototype = OriginalWebSocket.prototype;
     // Assign custom constructor back to window
-    (window as any).WebSocket = CustomWebSocket;
+    try {
+      (window as any).WebSocket = CustomWebSocket;
+    } catch (err) {
+      console.warn('⚠️ Couldn\'t patch window.WebSocket directly (read-only in sandbox):', err);
+    }
   }
 
   // 2. Add high-level defensive handlers as backups to catch and ignore residual web socket notices

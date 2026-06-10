@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { GoogleGenAI } from '@google/genai';
+
 const firebaseConfigStatic = {
   projectId: "teak-dialect-t71nt",
   appId: "1:603740095570:web:ae1e82c9b3b7c95bf38b8b",
@@ -79,6 +81,127 @@ interface Registration {
   timestamp: string;
   transactionId?: string;       // payment transaction ID (inline proof)
   screenshotImage?: string;     // base64 encoded user screenshot proof option
+  // --- New AI Pre-Verification Fields ---
+  aiVerified?: boolean;
+  aiExtractedTransactionId?: string;
+  aiExtractedAmount?: number;
+  aiExtractedSenderName?: string;
+  aiVerificationStatus?: 'verified' | 'unclear' | 'invalid' | 'not_analyzed';
+  aiFeedback?: string;
+}
+
+// Lazy initialization of Gemini client
+let aiClient: GoogleGenAI | null = null;
+function getGeminiClient(): GoogleGenAI | null {
+  if (!aiClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn('⚠️ GEMINI_API_KEY environment variable is not defined.');
+      return null;
+    }
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
+  return aiClient;
+}
+
+// Helper function to analyze the user-uploaded payment screenshot with Gemini Vision
+async function analyzePaymentScreenshot(screenshotImage: string) {
+  try {
+    const aiInstance = getGeminiClient();
+    if (!aiInstance) {
+      return {
+        aiVerified: false,
+        aiVerificationStatus: 'not_analyzed' as const,
+        aiFeedback: 'Gemini API key is not configured in secrets.'
+      };
+    }
+
+    let base64Data = '';
+    let mimeType = 'image/jpeg';
+    if (screenshotImage.includes(';base64,')) {
+      const parts = screenshotImage.split(';base64,');
+      mimeType = parts[0].replace('data:', '');
+      base64Data = parts[1];
+    } else {
+      base64Data = screenshotImage;
+    }
+
+    if (!base64Data || base64Data.trim() === '') {
+      return {
+        aiVerified: false,
+        aiVerificationStatus: 'not_analyzed' as const,
+        aiFeedback: 'Empty screenshot content.'
+      };
+    }
+
+    const imagePart = {
+      inlineData: {
+        data: base64Data,
+        mimeType: mimeType
+      }
+    };
+
+    const promptText = `Analyze this image, which was submitted by a user as a UPI/GPay/Paytm/PhonePe/BHIM bank payment receipt screenshot for booking a pool party ticket.
+Determine the following fields:
+1. Is this image a valid payment confirmation receipt/screenshot? (Respond with true or false)
+2. Extracted Transaction ID / Ref No / UPI Transaction ID / UTR (if any).
+3. Extracted Payment Amount in INR (number only, do not include Rs or other symbols).
+4. Extracted UPI Sender Name or Bank Account Name.
+5. Overall Verification Confidence Feedback (e.g. "Valid UPI receipt screenshot", "Unclear or low resolution", "Not a payment receipt - invalid").
+
+Provide the response as a JSON object with these exact keys:
+{
+  "isValidPaymentProof": boolean,
+  "extractedTransactionId": "string",
+  "extractedAmount": number,
+  "extractedSenderName": "string",
+  "verificationStatus": "verified" | "unclear" | "invalid",
+  "feedback": "string"
+}
+Only output the raw JSON object. Do not wrap the JSON inside markdown blockquotes like \`\`\`json.`;
+
+    const response = await aiInstance.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: [
+        imagePart,
+        { text: promptText }
+      ],
+      config: {
+        responseMimeType: "application/json"
+      }
+    });
+
+    const textContent = response.text;
+    if (!textContent) {
+      throw new Error('Zero response bytes from Gemini model.');
+    }
+
+    const cleanJson = textContent.replace(/```json/g, '').replace(/```/g, '').trim();
+    const resultObj = JSON.parse(cleanJson);
+
+    return {
+      aiVerified: !!resultObj.isValidPaymentProof,
+      aiExtractedTransactionId: resultObj.extractedTransactionId || '',
+      aiExtractedAmount: typeof resultObj.extractedAmount === 'number' ? resultObj.extractedAmount : undefined,
+      aiExtractedSenderName: resultObj.extractedSenderName || '',
+      aiVerificationStatus: (resultObj.verificationStatus || 'unclear') as 'verified' | 'unclear' | 'invalid',
+      aiFeedback: resultObj.feedback || 'Image pre-scanned successfully.'
+    };
+  } catch (err: any) {
+    console.error('Error analyzing payment screenshot with Gemini:', err);
+    return {
+      aiVerified: false,
+      aiVerificationStatus: 'unclear' as const,
+      aiFeedback: `Automated analysis failed: ${err.message || err}`
+    };
+  }
 }
 
 // Ensure registrations JSON file exists
@@ -428,6 +551,18 @@ app.get('/api/health', (req, res) => {
         return res.status(400).json({ error: 'Invalid phone number. Please enter a valid 10-digit mobile number.' });
       }
 
+      let aiResult: any = {
+        aiVerified: false,
+        aiVerificationStatus: 'not_analyzed' as const,
+        aiFeedback: 'No payment proof screenshot was attached.'
+      };
+
+      if (screenshotImage) {
+        console.log(`📡 Analyzing payment screenshot using Gemini AI for ${firstName} ${lastName}...`);
+        aiResult = await analyzePaymentScreenshot(screenshotImage);
+        console.log(`🤖 Gemini verification result for ${firstName}:`, aiResult);
+      }
+
       const newRecord: Registration = {
         id: 'reg_' + Math.random().toString(36).substr(2, 9),
         firstName,
@@ -444,7 +579,8 @@ app.get('/api/health', (req, res) => {
         status: 'Pending Verification',
         timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
         transactionId: transactionId || 'Not provided',
-        screenshotImage: screenshotImage || ''
+        screenshotImage: screenshotImage || '',
+        ...aiResult
       };
 
       // Attempt to save to database - throw error up if Firestore fails
@@ -482,7 +618,12 @@ app.get('/api/health', (req, res) => {
         `--------------------------------------------------\n` +
         `Since payments are handled via UPI, your ticket remains PENDING VERIFICATION.\n` +
         `We have secured your uploaded payment proof and UPI Sender Name/ID (${newRecord.transactionId}) in our records.\n\n` +
-        `Our review team (email contact/owner: parthdua007@gmail.com or ignyt@ignyt.co.in) will verify your submission.\n` +
+        `🤖 AUTOMATED AI SCREENSHOT PRE-CHECK:\n` +
+        `- Status: ${newRecord.aiVerificationStatus?.toUpperCase()}\n` +
+        `- AI Detected Ref/UTR: ${newRecord.aiExtractedTransactionId || 'Not parsed'}\n` +
+        `- AI Detected Amount: Rs. ${newRecord.aiExtractedAmount || 'Not parsed'}\n` +
+        `- AI Helper Feedback: "${newRecord.aiFeedback}"\n\n` +
+        `Our review team (owners: parthdua007@gmail.com or ignyt@ignyt.co.in) will verify your submission.\n` +
         `Once payment is confirmed, we will send you your official check-in ticket ID immediately.\n\n` +
         `See you soon!\n` +
         `— IGNYT Co. Team\n` +
@@ -523,6 +664,22 @@ app.get('/api/health', (req, res) => {
           </div>
         </div>
         
+        ${newRecord.aiVerificationStatus && newRecord.aiVerificationStatus !== 'not_analyzed' ? `
+        <div style="background-color: rgba(255, 255, 255, 0.02); border: 1px dashed rgba(201, 168, 76, 0.3); padding: 16px; border-radius: 6px; margin-top: 24px; margin-bottom: 24px;">
+          <h4 style="color: #C9A84C; font-size: 11px; text-transform: uppercase; margin-top: 0; margin-bottom: 8px; letter-spacing: 0.15em; font-weight: 600;">🤖 AI Payment Proof Pre-Screening</h4>
+          <p style="font-size: 12.5px; line-height: 1.5; color: rgba(240, 235, 227, 0.8); margin: 0 0 8px 0;">
+             Our auto-screening assistant examined your uploaded screenshot proof:
+          </p>
+          <div style="font-size: 11.5px; font-family: monospace; color: rgba(240, 235, 227, 0.6); line-height: 1.6;">
+            <div>• Detection Status: <strong style="color: ${newRecord.aiVerificationStatus === 'verified' ? '#4CAF50' : newRecord.aiVerificationStatus === 'unclear' ? '#FFA000' : '#F44336'}">${newRecord.aiVerificationStatus.toUpperCase()}</strong></div>
+            ${newRecord.aiExtractedTransactionId ? `<div>• Extracted UPI Ref/UTR: <strong>${newRecord.aiExtractedTransactionId}</strong></div>` : ''}
+            ${newRecord.aiExtractedAmount ? `<div>• Detected Amount: <strong>Rs. ${newRecord.aiExtractedAmount}</strong></div>` : ''}
+            ${newRecord.aiExtractedSenderName ? `<div>• Detected Name: <strong>${newRecord.aiExtractedSenderName}</strong></div>` : ''}
+            ${newRecord.aiFeedback ? `<div style="margin-top: 6px; color: #C9A84C; font-style: italic;">"${newRecord.aiFeedback}"</div>` : ''}
+          </div>
+        </div>
+        ` : ''}
+
         <h3 style="color: #C9A84C; font-weight: 500; font-size: 15px; margin-top: 24px; text-transform: uppercase; letter-spacing: 0.05em;">⚠️ Next Step: Payment Matching</h3>
         <p>Since checkout payment is validated via custom UPI receipt statement inspection, our review team will match your submitted UPI Sender Name/ID (<strong>${transactionId}</strong>) against our bank reference statements shortly.</p>
         <p>As soon as payment matches, your access ticket containing a secure check-in ID will be delivered directly to your inbox.</p>
@@ -548,6 +705,12 @@ app.get('/api/health', (req, res) => {
         `⚡ HEARD FROM: ${heardFrom}\n` +
         `💳 TRANSACTION REF ID: ${newRecord.transactionId || 'Not provided'}\n` +
         `⏳ TIME: ${newRecord.timestamp}\n\n` +
+        `🤖 Automated AI Pre-Verification Summary:\n` +
+        `- AI Detection Status: ${newRecord.aiVerificationStatus?.toUpperCase() || 'NOT_ANALYZED'}\n` +
+        `- AI Extracted UTR / Transaction ID: ${newRecord.aiExtractedTransactionId || 'None detected'}\n` +
+        `- AI Extracted Amount: ${newRecord.aiExtractedAmount ? 'Rs. ' + newRecord.aiExtractedAmount : 'None'}\n` +
+        `- AI Extracted Name on Receipt: ${newRecord.aiExtractedSenderName || 'None'}\n` +
+        `- AI Helper Feedback: "${newRecord.aiFeedback}"\n\n` +
         `Please check the Admin Dashboard or check the payment record against your UPI statement for ${email}'s transaction ID: ${newRecord.transactionId}.\n` +
         `Once verified, log in to the admin panel and confirm their registration.`;
 
