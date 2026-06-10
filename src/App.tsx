@@ -42,13 +42,29 @@ interface Registration {
   timestamp: string;
   transactionId?: string;
   screenshotImage?: string;
-  // --- New AI Pre-Verification Fields ---
   aiVerified?: boolean;
   aiExtractedTransactionId?: string;
   aiExtractedAmount?: number;
   aiExtractedSenderName?: string;
   aiVerificationStatus?: 'verified' | 'unclear' | 'invalid' | 'not_analyzed';
   aiFeedback?: string;
+  razorpayPaymentId?: string;
+  razorpayOrderId?: string;
+}
+
+// Load Razorpay checkout script once
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if ((window as any).Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
 }
 
 export default function App() {
@@ -100,14 +116,9 @@ export default function App() {
 
   // Flow State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalStep, setModalStep] = useState<1 | 2>(1); // 1: Pay/QR, 2: Upload Proof Google Form
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [submittingRegistration, setSubmittingRegistration] = useState(false);
-  const [submittedProof, setSubmittedProof] = useState(false);
-  const [bypassUpload, setBypassUpload] = useState(false);
-  const [transactionId, setTransactionId] = useState('');
-  const [screenshotBase64, setScreenshotBase64] = useState('');
-  const [screenshotName, setScreenshotName] = useState('');
+  const [paymentError, setPaymentError] = useState('');
 
   // Admin states
   const [adminRegistrations, setAdminRegistrations] = useState<Registration[]>([]);
@@ -154,7 +165,6 @@ export default function App() {
       const res = await fetch('/api/admin/registrations');
       if (res.ok) {
         const data = await res.json();
-        // Sort registrations to show pending ones first, then newest
         const sorted = data.sort((a: Registration, b: Registration) => {
           if (a.status === 'Pending Verification' && b.status === 'Verified') return -1;
           if (a.status === 'Verified' && b.status === 'Pending Verification') return 1;
@@ -190,7 +200,6 @@ export default function App() {
         body: JSON.stringify({ id })
       });
       if (res.ok) {
-        // Refresh local admin list
         fetchRegistrations();
         alert('Ticket successfully verified! Official confirmation email sent to attendee.');
       }
@@ -291,95 +300,7 @@ export default function App() {
     return Object.keys(errors).length === 0;
   };
 
-  // File screenshot handler helper with client-side compression to prevent 413 Payload Too Large & Firestore document limit issues
-  const handleScreenshotChange = (file: File) => {
-    if (!file) return;
-    
-    // We can support up to 20MB files now because we will compress them client-side immediately
-    if (file.size > 20 * 1024 * 1024) {
-      alert("Screenshot file size should be less than 20MB");
-      return;
-    }
-
-    // Set temporary label indicating optimization progress
-    setScreenshotName(file.name + " (Optimizing...)");
-
-    const maxW = 1000;
-    const maxH = 1000;
-    const quality = 0.7;
-
-    const doCompression = () => {
-      if (!file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setScreenshotBase64(reader.result as string);
-          setScreenshotName(file.name);
-          setSubmittedProof(true);
-        };
-        reader.readAsDataURL(file);
-        return;
-      }
-
-      const img = new Image();
-      const objectUrl = URL.createObjectURL(file);
-      
-      img.onload = () => {
-        URL.revokeObjectURL(objectUrl);
-        let width = img.width;
-        let height = img.height;
-
-        if (width > maxW) {
-          height = Math.round((height * maxW) / width);
-          width = maxW;
-        }
-        if (height > maxH) {
-          width = Math.round((width * maxH) / height);
-          height = maxH;
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          // Fallback to plain reader
-          const reader = new FileReader();
-          reader.onload = () => {
-            setScreenshotBase64(reader.result as string);
-            setScreenshotName(file.name);
-            setSubmittedProof(true);
-          };
-          reader.readAsDataURL(file);
-          return;
-        }
-
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        setScreenshotBase64(dataUrl);
-        setScreenshotName(file.name);
-        setSubmittedProof(true);
-      };
-
-      img.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
-        // Fallback to plain reader
-        const reader = new FileReader();
-        reader.onload = () => {
-          setScreenshotBase64(reader.result as string);
-          setScreenshotName(file.name);
-          setSubmittedProof(true);
-        };
-        reader.readAsDataURL(file);
-      };
-
-      img.src = objectUrl;
-    };
-
-    doCompression();
-  };
-
-  // Trigger Registration flow
+  // Trigger Registration flow → open payment modal
   const handleProceedToPayment = () => {
     if (!validateRegistration()) {
       const firstError = Object.keys(formErrors)[0];
@@ -389,80 +310,139 @@ export default function App() {
       }
       return;
     }
-    // Form is verified, open payment flow
-    setModalStep(1);
+    setPaymentError('');
     setIsModalOpen(true);
   };
 
-  // Save Registration details from inline proof and claim payment
-  const handleConfirmDonePaymentProof = async () => {
-    if (!submittedProof && !bypassUpload) {
-      alert("Please upload your payment screenshot or check the alternative bypass option to complete registration!");
-      return;
-    }
-    if (!transactionId.trim()) {
-      alert("Please enter the Sender's Name on UPI Account or Payment Receipt for payment verification!");
-      return;
-    }
+  // ─── RAZORPAY CHECKOUT FLOW ───────────────────────────────
+  const handleRazorpayPayment = async () => {
+    setPaymentError('');
     setSubmittingRegistration(true);
+
     try {
       const selectedPricing = pricingData[formData.ticket as keyof typeof pricingData];
-      const ticketDescription = `${selectedPricing.name} — ₹${selectedPricing.amount}`;
+      const amount = selectedPricing.amount;
+      const ticketDescription = `${selectedPricing.name} — ₹${amount}`;
 
-      const res = await fetch('/api/register', {
+      // 1. Load Razorpay script
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        setPaymentError('Could not load payment gateway. Please check your connection and try again.');
+        setSubmittingRegistration(false);
+        return;
+      }
+
+      // 2. Create order on backend
+      const orderRes = await fetch('/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          age: formData.age,
-          gender: formData.gender,
-          phone: formData.phone,
-          email: formData.email,
-          city: formData.city,
-          instagram: formData.instagram,
-          heardFrom: formData.heardFrom,
-          dietary: formData.dietary,
-          ticket: ticketDescription,
-          transactionId: transactionId,
-          screenshotImage: screenshotBase64
-        })
+        body: JSON.stringify({ amount })
       });
 
-      if (res.ok) {
-        setRegisteredEmail(formData.email);
-        setIsModalOpen(false);
-        setSubmittedProof(false);
-        setBypassUpload(false);
-        setTransactionId('');
-        setScreenshotBase64('');
-        setScreenshotName('');
-        // Reset state
-        setFormData({
-          firstName: '',
-          lastName: '',
-          age: '',
-          gender: '',
-          phone: '',
-          email: '',
-          city: '',
-          instagram: '',
-          heardFrom: '',
-          dietary: 'No restrictions',
-          ticket: '',
-        });
-        setConsents({ c1: false, c2: false, c3: false, c4: false });
-        setCurrentTab('success');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        const serverError = errorData.error || 'Could not submit details, please try again.';
-        alert(serverError);
+      if (!orderRes.ok) {
+        const errData = await orderRes.json().catch(() => ({}));
+        setPaymentError(errData.error || 'Could not start payment. Please try again.');
+        setSubmittingRegistration(false);
+        return;
       }
+
+      const orderData = await orderRes.json();
+
+      // 3. Open Razorpay checkout
+      const options = {
+        key: orderData.key_id,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: 'IGNYT.CO',
+        description: `${selectedPricing.name} — Summer Pool Party`,
+        order_id: orderData.order_id,
+        prefill: {
+          name: `${formData.firstName} ${formData.lastName}`,
+          email: formData.email,
+          contact: formData.phone,
+        },
+        notes: {
+          ticket: ticketDescription,
+        },
+        theme: {
+          color: '#C9A84C',
+        },
+        handler: async function (response: any) {
+          // 4. Verify the payment signature on backend
+          try {
+            const verifyRes = await fetch('/api/verify-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              })
+            });
+
+            const verifyData = await verifyRes.json();
+
+            if (verifyData.verified) {
+              // 5. Save the verified registration
+              await fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  firstName: formData.firstName,
+                  lastName: formData.lastName,
+                  age: formData.age,
+                  gender: formData.gender,
+                  phone: formData.phone,
+                  email: formData.email,
+                  city: formData.city,
+                  instagram: formData.instagram,
+                  heardFrom: formData.heardFrom,
+                  dietary: formData.dietary,
+                  ticket: ticketDescription,
+                  razorpayPaymentId: response.razorpay_payment_id,
+                  razorpayOrderId: response.razorpay_order_id,
+                  paymentVerified: true,
+                })
+              });
+
+              // 6. Show success screen
+              setRegisteredEmail(formData.email);
+              setIsModalOpen(false);
+              setFormData({
+                firstName: '', lastName: '', age: '', gender: '', phone: '',
+                email: '', city: '', instagram: '', heardFrom: '',
+                dietary: 'No restrictions', ticket: '',
+              });
+              setConsents({ c1: false, c2: false, c3: false, c4: false });
+              setCurrentTab('success');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+              setPaymentError('Payment could not be verified. If money was deducted, contact us on WhatsApp and we will sort it immediately.');
+            }
+          } catch (err) {
+            console.error('Verify error:', err);
+            setPaymentError('Payment verification failed. If money was deducted, contact us on WhatsApp right away.');
+          } finally {
+            setSubmittingRegistration(false);
+          }
+        },
+        modal: {
+          ondismiss: function () {
+            setSubmittingRegistration(false);
+            setPaymentError('Payment was cancelled. You can try again, or reach us on WhatsApp if you need help.');
+          }
+        }
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.on('payment.failed', function (response: any) {
+        setSubmittingRegistration(false);
+        setPaymentError(`Payment failed: ${response.error?.description || 'Please try again'}. Or reach us on WhatsApp for help.`);
+      });
+      rzp.open();
     } catch (err: any) {
-      console.error('Submission failed:', err);
-      alert(`Error connecting to registration engine: ${err.message || err}`);
-    } finally {
+      console.error('Payment flow error:', err);
+      setPaymentError(`Something went wrong: ${err.message || err}. Please try again or contact us on WhatsApp.`);
       setSubmittingRegistration(false);
     }
   };
@@ -653,13 +633,11 @@ export default function App() {
                 rel="noopener noreferrer"
                 className="border border-white/5 aspect-[3/4] flex flex-col items-center justify-center bg-[#070707] relative overflow-hidden group hover:border-[#C9A84C]/25 transition-all duration-300 rounded shadow-2xl"
               >
-                {/* Premium Golden-Laser Nightlife Background Image representing luxury events & crowds */}
                 <div 
                   className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?q=95&w=1920&auto=format&fit=crop')] bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-50 group-hover:opacity-80"
                   referrerPolicy="no-referrer"
                 />
                 
-                {/* Aesthetic Dark Vignette Overlay & Radial Gold Glow */}
                 <div className="absolute inset-0 bg-[#0F0F0F]/65 group-hover:bg-[#0F0F0F]/40 transition-colors duration-500" />
                 <div className="absolute inset-0 bg-radial-gradient from-[#C9A84C]/20 via-transparent to-transparent opacity-90" />
                 
@@ -670,7 +648,6 @@ export default function App() {
                   We Spark The Night.
                 </div>
                 
-                {/* Unclippable, unwrappable styled absolute background brand watermark */}
                 <div className="font-serif-cormorant italic text-[60px] text-[#C9A84C]/5 font-light absolute bottom-4 right-6 leading-none tracking-widest whitespace-nowrap select-none transition-all duration-500 group-hover:opacity-15">
                   IGNYT
                 </div>
@@ -691,7 +668,6 @@ export default function App() {
                 onClick={() => { setCurrentTab('form'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                 className="group relative flex flex-col md:flex-row justify-between items-start md:items-center gap-10 p-8 md:p-12 mb-12 bg-gradient-to-br from-[#1a1306] to-[#0A0A0A]/95 border border-[#C9A84C]/45 border-l-[6px] border-l-[#C9A84C] rounded-lg cursor-pointer hover:shadow-2xl hover:shadow-[#C9A84C]/5 hover:border-[#C9A84C] transition-all duration-300"
               >
-                {/* Visual indicator corner glow */}
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#C9A84C]/5 rounded-full blur-3xl pointer-events-none" />
 
                 <div className="max-w-[750px] relative z-10">
@@ -1409,7 +1385,7 @@ export default function App() {
                 Proceed to Payment
               </button>
               <div className="font-sans text-xs tracking-[0.2em] text-[#F0EBE3]/40 uppercase mt-5">
-                Scan UPI QR Code to verify admission
+                Secure payment via Razorpay · UPI · Cards · Netbanking
               </div>
             </div>
 
@@ -1429,22 +1405,21 @@ export default function App() {
             You're In.
           </h1>
           <div className="font-sans text-[10px] tracking-[0.4em] text-[#C9A84C] uppercase mb-8">
-            Registration Recieved
+            Booking Confirmed & Paid
           </div>
           
           <div className="w-12 h-[1px] bg-[#C9A84C] mx-auto mb-8 opacity-50" />
 
           <p className="font-sans font-light text-sm text-[#F0EBE3]/60 leading-relaxed tracking-wider mb-10">
-            Your spot has been earmarked for the legendary <strong className="text-white font-medium">Summer Pool Party</strong> by IGNYT Co.<br /><br />
-            We have dispatched a notification summary to <strong className="text-[#C9A84C] font-normal">{registeredEmail}</strong>.<br />
-            Since tickets require confirmation of payment, our organizers will check your submission and verify your seat shortly against the provided UPI Sender Name!<br /><br />
+            Your spot is officially <strong className="text-white font-medium">confirmed</strong> for the legendary <strong className="text-white font-medium">Summer Pool Party</strong> by IGNYT Co.<br /><br />
+            Your payment was successful and we've dispatched your official ticket with your unique Booking ID to <strong className="text-[#C9A84C] font-normal">{registeredEmail}</strong>.<br /><br />
             <span className="block border border-white/5 bg-[#0F0F0F] p-4 rounded text-xs text-[#F0EBE3]/80 mb-4 text-left font-sans">
-              <strong>Need instant assistance? Contact Organizer:</strong><br />
+              <strong>Need assistance? Contact Organizer:</strong><br />
               📞 Phone: <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a><br />
               ✉️ Email: <a href="mailto:ignyt@ignyt.co.in" className="text-[#C9A84C] hover:underline">ignyt@ignyt.co.in</a><br />
               📸 Instagram: <a href="https://instagram.com/ignyt.co" target="_blank" rel="noopener noreferrer" className="text-[#C9A84C] hover:underline">@ignyt.co</a>
             </span>
-            Follow <strong className="text-[#C9A84C]">@ignyt.co</strong> on Instagram to catch direct updates on specific announcements!
+            Follow <strong className="text-[#C9A84C]">@ignyt.co</strong> on Instagram to catch direct updates on announcements!
           </p>
 
           <div className="flex flex-wrap gap-4 justify-center">
@@ -1527,7 +1502,7 @@ export default function App() {
                 <div>
                   <h3 className="font-serif-cormorant text-2xl text-white font-light">Registrations Database</h3>
                   <p className="font-sans text-[10px] text-[#F0EBE3]/30 tracking-wider mt-1">
-                    Please cross-reference emails here with the uploaded payment proof in Google Forms on parthdua007@gmail.com
+                    Razorpay-paid bookings appear as Verified automatically. Cross-check payments in your Razorpay Dashboard anytime.
                   </p>
                 </div>
 
@@ -1540,12 +1515,12 @@ export default function App() {
                     {adminLoading ? 'Syncing...' : 'Force Reload list'}
                   </button>
                   <a 
-                    href="https://docs.google.com/forms/d/e/1FAIpQLSexh4WDQR8D_hzRUELWFsGZnvMqwOkHCtb_sy269s7bk1LIug/viewform"
+                    href="https://dashboard.razorpay.com/app/payments"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-sans text-[9px] tracking-widest text-[#F0EBE3]/50 border border-white/5 bg-transparent px-5 py-3 uppercase hover:border-[#C9A84C]/35 hover:text-white transition-all text-center"
                   >
-                    Check Google Form
+                    Razorpay Dashboard
                   </a>
                 </div>
               </div>
@@ -1641,65 +1616,15 @@ export default function App() {
                           </td>
                           <td className="p-4">
                             <div className="font-serif-cormorant text-base text-white">{r.ticket}</div>
-                            {r.transactionId && (
+                            {r.razorpayPaymentId ? (
+                              <div className="font-sans text-[10px] text-green-400/90 mt-1 uppercase tracking-wider bg-green-400/5 border border-green-400/10 px-2 py-0.5 rounded inline-block font-medium">
+                                💳 Razorpay: {r.razorpayPaymentId}
+                              </div>
+                            ) : r.transactionId && (
                               <div className="font-sans text-[10px] text-[#C9A84C]/90 mt-1 uppercase tracking-wider bg-[#C9A84C]/5 border border-[#C9A84C]/10 px-2 py-0.5 rounded inline-block font-medium">
-                                UPI Name: {r.transactionId}
+                                {r.transactionId}
                               </div>
                             )}
-                            {r.screenshotImage ? (
-                              <div className="mt-1.5 flex items-center gap-1.5 font-sans">
-                                <span className="text-[9px] text-[#F0EBE3]/40">Screenshot:</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const w = window.open();
-                                    w?.document.write(`<img src="${r.screenshotImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
-                                  }}
-                                  className="text-[9px] text-white underline hover:text-[#C9A84C] cursor-pointer"
-                                >
-                                  View Proof ↗
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="text-[8px] text-[#F0EBE3]/20 font-sans mt-1">No screenshot</div>
-                            )}
-                            
-                            {/* --- New AI pre-verification card display --- */}
-                            {r.aiVerificationStatus && r.aiVerificationStatus !== 'not_analyzed' && (
-                              <div className="mt-2.5 p-2 bg-[#0F0F0F] border border-white/5 rounded text-[10px] space-y-0.5 max-w-[240px]">
-                                <div className="flex items-center gap-1 font-sans font-semibold tracking-wider text-[8px] uppercase text-[#C9A84C] mb-1">
-                                  <span className="w-1 h-1 rounded-full bg-[#C9A84C]" />
-                                  AI Pre-screening Check
-                                </div>
-                                <div className="font-sans text-[#F0EBE3]/60 text-[9.5px]">
-                                  Verdict: <span className={`font-semibold uppercase tracking-wider text-[9px] ${
-                                    r.aiVerificationStatus === 'verified' ? 'text-green-400' :
-                                    r.aiVerificationStatus === 'unclear' ? 'text-orange-400' : 'text-red-400'
-                                  }`}>{r.aiVerificationStatus}</span>
-                                </div>
-                                {r.aiExtractedTransactionId && (
-                                  <div className="font-mono text-[9px] text-[#F0EBE3]/55 truncate">
-                                    Ref/UTR: <span className="text-[#F0EBE3]/85">{r.aiExtractedTransactionId}</span>
-                                  </div>
-                                )}
-                                {r.aiExtractedAmount !== undefined && (
-                                  <div className="font-sans text-[9px] text-[#F0EBE3]/55">
-                                    Amount: <span className="font-semibold text-[#C9A84C]">Rs. {r.aiExtractedAmount}</span>
-                                  </div>
-                                )}
-                                {r.aiExtractedSenderName && (
-                                  <div className="font-sans text-[9px] text-[#F0EBE3]/55 truncate">
-                                    Sender: <span className="text-[#F0EBE3]/80">{r.aiExtractedSenderName}</span>
-                                  </div>
-                                )}
-                                {r.aiFeedback && (
-                                  <div className="text-[9px] text-[#C9A84C]/90 italic mt-1 font-sans leading-relaxed border-t border-white/5 pt-1">
-                                    "{r.aiFeedback}"
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
                             <div className="font-sans text-[9px] text-[#F0EBE3]/25 tracking-wider mt-1.5 block">Diet: {r.dietary}</div>
                           </td>
                           <td className="p-4">
@@ -1765,20 +1690,20 @@ export default function App() {
 
 
       {/* =========================================
-                   PAYMENT MODAL
+                   PAYMENT MODAL (RAZORPAY)
          ========================================= */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-[#060606]/92 z-[500] flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
-          <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 max-w-[520px] w-full p-8 md:p-10 text-center relative animate-modal-in rounded my-8 max-h-[90vh] overflow-y-auto">
+          <div className="bg-[#0F0F0F] border border-[#C9A84C]/25 max-w-[480px] w-full p-8 md:p-10 text-center relative animate-modal-in rounded my-8">
             
             <button 
-              onClick={() => setIsModalOpen(false)}
+              onClick={() => { setIsModalOpen(false); setPaymentError(''); }}
               className="absolute top-4 right-5 text-[#F0EBE3]/30 hover:text-white text-2xl p-1 transition-colors outline-none"
             >
               ×
             </button>
 
-            <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2">Complete Reservation</div>
+            <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2">Complete Your Booking</div>
             <h3 className="font-serif-cormorant text-2xl font-light text-white mb-1">
               {pricingData[formData.ticket as keyof typeof pricingData]?.name || 'Pass Admission'}
             </h3>
@@ -1788,193 +1713,40 @@ export default function App() {
               {(pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0).toLocaleString('en-IN')}
             </div>
 
-            {/* PROGRESS STEP DOTS */}
-            <div className="flex items-center justify-center gap-8 mb-6">
-              <button 
-                onClick={() => setModalStep(1)}
-                className={`font-sans text-[8px] tracking-[0.2em] uppercase pb-1 border-b ${
-                  modalStep === 1 ? 'border-[#C9A84C] text-[#C9A84C]' : 'border-transparent text-white/30'
-                }`}
-              >
-                1. Scan & Pay
-              </button>
-              <button 
-                onClick={() => setModalStep(2)}
-                className={`font-sans text-[8px] tracking-[0.2em] uppercase pb-1 border-b ${
-                  modalStep === 2 ? 'border-[#C9A84C] text-[#C9A84C]' : 'border-transparent text-white/30'
-                }`}
-              >
-                2. Upload Proof
-              </button>
-            </div>
+            <div className="w-10 h-[1.5px] bg-[#C9A84C]/30 mx-auto mb-6" />
 
-            {/* STEP 1: SCAN AND PAY */}
-            {modalStep === 1 && (
-              <div className="animate-rise">
-                <div className="bg-white p-4 inline-block mb-3 rounded shadow">
-                  {/* Real Dynamic Generated UPI QR Code */}
-                  <div className="flex flex-col items-center justify-center p-2 text-[#111] font-sans">
-                    <img 
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&color=000000&data=${encodeURIComponent(`upi://pay?pa=parthdua70-3@okicici&pn=IGNYT%20CO&am=${pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0}&cu=INR`)}`}
-                      alt="UPI Scan to Pay QR Code"
-                      className="w-[180px] h-[180px] object-contain border border-gray-200 p-1"
-                      referrerPolicy="no-referrer"
-                    />
-                    <p className="font-bold text-xs tracking-tight uppercase mt-2 text-black">Rs. {pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0} INR</p>
-                    <p className="text-[7.5px] tracking-widest text-[#C9A84C] uppercase font-bold mt-1">Official IGNYT Pool Pass QR</p>
-                    <div className="mt-1.5 text-[7px] text-[#111]/70 font-mono word-break-all bg-[#111]/5 px-2 py-0.5 select-all pointer-events-auto">parthdua70-3@okicici</div>
-                  </div>
-                </div>
+            <p className="font-sans text-[11px] text-[#F0EBE3]/60 leading-relaxed mb-2">
+              You'll pay securely via <strong className="text-[#C9A84C]">Razorpay</strong>. Pay using any UPI app, debit/credit card, or netbanking.
+            </p>
+            <p className="font-sans text-[10px] text-[#F0EBE3]/40 leading-relaxed mb-6">
+              ✅ Instant confirmation · Your ticket is emailed automatically the moment payment succeeds.
+            </p>
 
-                <div className="font-sans text-[10px] tracking-wide text-[#F0EBE3]/50 leading-relaxed mb-4">
-                  Open any UPI App (GPay, PhonePe, Paytm, etc.) and scan the QR above or pay to our Official Handle:
-                  <strong className="text-white block text-sm font-semibold tracking-wide select-all mt-1 pointer-events-auto bg-black/40 py-2.5 rounded border border-white/[0.03]">
-                    parthdua70-3@okicici
-                  </strong>
-                </div>
-
-                <div className="font-sans text-[9px] text-[#F0EBE3]/40 tracking-wide mb-5">
-                  ⚠️ Having trouble billing or checking out? Contact Organizer: <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a> (Call / WhatsApp) or email <a href="mailto:ignyt@ignyt.co.in" className="text-[#C9A84C] hover:underline">ignyt@ignyt.co.in</a>
-                </div>
-
-                <div className="w-10 h-[1.5px] bg-[#C9A84C]/30 mx-auto mb-6" />
-
-                <button 
-                  onClick={() => setModalStep(2)}
-                  className="w-full bg-[#C9A84C] text-black font-sans text-[9px] tracking-[0.3em] uppercase p-4 hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all"
+            {paymentError && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded p-3 mb-5 text-left">
+                <p className="font-sans text-[11px] text-red-400 leading-relaxed">{paymentError}</p>
+                <a 
+                  href="https://wa.me/917496088484?text=Hi%20IGNYT%2C%20I%20had%20trouble%20paying%20for%20the%20Summer%20Pool%20Party%20ticket.%20Please%20help."
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block mt-2 font-sans text-[10px] tracking-widest text-green-400 underline uppercase"
                 >
-                  Next: Submit Payment Proof →
-                </button>
+                  💬 Message us on WhatsApp →
+                </a>
               </div>
             )}
 
-            {/* STEP 2: INTEGRATED IMMERSIVE PAYMENT PROOF SUBMISSION */}
-            {modalStep === 2 && (
-              <div className="animate-rise">
-                <div className="text-left mb-6">
-                  <h4 className="font-serif-cormorant text-lg text-[#C9A84C] font-light mb-1">Verify Upload Proof</h4>
-                  <p className="font-sans text-[9.3px] text-[#F0EBE3]/50 tracking-wider leading-relaxed">
-                    Review and finalize your session pass reservation. Paste your transaction tracking code and attach your payment receipt screenshot. No external logins required.
-                  </p>
-                </div>
+            <button 
+              onClick={handleRazorpayPayment}
+              disabled={submittingRegistration}
+              className="w-full bg-[#C9A84C] text-black font-sans text-[10px] tracking-[0.3em] uppercase p-4 hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {submittingRegistration ? 'Opening Payment...' : `Pay ₹${(pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0).toLocaleString('en-IN')} Securely`}
+            </button>
 
-                {/* INTEGRATED PAYMENT PROOF FORMS */}
-                <div className="bg-[#0A0A0A]/80 border border-white/5 p-5 rounded mb-6 flex flex-col gap-4 text-left">
-                  <div>
-                    <label className="font-sans text-xs tracking-[0.2em] font-semibold text-[#C9A84C] uppercase block mb-2">
-                      Sender Name on UPI Account or Receipt *
-                    </label>
-                    <input 
-                      type="text"
-                      className="w-full bg-[#121212] border border-white/20 p-3.5 font-sans text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#C9A84C] transition-all rounded tracking-wide font-medium"
-                      placeholder="e.g. Rahul Sharma"
-                      value={transactionId}
-                      onChange={e => {
-                        setTransactionId(e.target.value);
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="font-sans text-xs tracking-[0.2em] font-semibold text-[#C9A84C] uppercase block mb-2">
-                      Screenshot Proof *
-                    </label>
-
-                    {screenshotBase64 ? (
-                      <div className="border border-[#C9A84C]/20 bg-[#121212] p-4 rounded flex flex-col items-center gap-3 relative">
-                        <img 
-                          src={screenshotBase64} 
-                          alt="Screenshot Proof" 
-                          className="max-h-[140px] object-contain rounded border border-white/5 shadow-lg" 
-                        />
-                        <div className="text-center w-full">
-                          <p className="font-mono text-xs text-[#F0EBE3]/70 truncate max-w-[200px] mx-auto mb-1.5">{screenshotName}</p>
-                          <button 
-                            type="button"
-                            onClick={() => {
-                              setScreenshotBase64('');
-                              setScreenshotName('');
-                              setSubmittedProof(false);
-                            }}
-                            className="font-sans text-[10px] tracking-widest text-red-400 hover:text-red-300 uppercase cursor-pointer font-semibold"
-                          >
-                            Remove & pick another
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div 
-                        onDragOver={e => e.preventDefault()}
-                        onDrop={e => {
-                          e.preventDefault();
-                          if (e.dataTransfer.files?.[0]) handleScreenshotChange(e.dataTransfer.files[0]);
-                        }}
-                        className="border border-dashed border-white/20 hover:border-[#C9A84C]/50 bg-[#121212] p-7 rounded text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 group hover:bg-[#151515]"
-                        onClick={() => document.getElementById('screenshot_input')?.click()}
-                      >
-                        <input 
-                          type="file" 
-                          id="screenshot_input" 
-                          className="hidden" 
-                          accept="image/*"
-                          onChange={e => e.target.files?.[0] && handleScreenshotChange(e.target.files[0])}
-                        />
-                        <span className="text-2xl group-hover:scale-110 transition-transform">📸</span>
-                        <p className="font-sans text-xs text-white/85">Drag & drop receipt screenshot or <span className="text-[#C9A84C] underline font-medium">browse files</span></p>
-                        <p className="font-sans text-[10px] text-[#F0EBE3]/40 mt-1">PNG, JPG, JPEG formats are fully supported</p>
-                      </div>
-                    )}
-
-                    {/* Highly-Reliable Client Backup Option for Mobile/Stalling Upload Errors */}
-                    <div className="mt-3.5 p-3.5 bg-white/[0.01] border border-white/5 rounded-md flex items-start gap-3">
-                      <input 
-                        type="checkbox" 
-                        id="bypass_upload"
-                        className="mt-1 accent-[#C9A84C] h-4 w-4 rounded border-white/20 bg-[#121212] text-[#C9A84C] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                        checked={bypassUpload}
-                        onChange={e => {
-                          setBypassUpload(e.target.checked);
-                          if (e.target.checked) {
-                            setScreenshotBase64('');
-                            setScreenshotName('');
-                            setSubmittedProof(false);
-                          }
-                        }}
-                      />
-                      <label htmlFor="bypass_upload" className="font-sans text-[10.5px] cursor-pointer text-[#F0EBE3]/70 select-none leading-relaxed">
-                        <span className="text-[#C9A84C] font-semibold block mb-0.5">⚠️ No Screenshot? Mobile Upload Issue?</span>
-                        Check this box to submit without attaching an image. Our review team will manually verify using the <strong className="text-[#C9A84C]">UPI Name / Receipt Code</strong> provided above.
-                      </label>
-                    </div>
-
-                  </div>
-                </div>
-
-                {/* SECURED NOTE */}
-                <div className="bg-[#111111] border border-white/[0.02] p-3.5 rounded mb-6 text-left">
-                  <p className="font-sans text-[9.5px] text-[#F0EBE3]/60 leading-relaxed">
-                    💡 <span className="text-[#C9A84C] font-medium">Instant Verification:</span> Once submitted, your registration record remains pending until validated against physical statement matching. Your verified ticket is automatically dispatched to your email address.
-                  </p>
-                </div>
-
-                <div className="flex gap-2.5">
-                  <button 
-                    onClick={() => setModalStep(1)}
-                    className="w-1/3 border border-white/5 bg-transparent text-[#F0EBE3]/40 hover:text-white font-sans text-[9px] tracking-widest uppercase p-4"
-                  >
-                    ← Back
-                  </button>
-                  <button 
-                    onClick={handleConfirmDonePaymentProof}
-                    disabled={submittingRegistration || (!submittedProof && !bypassUpload) || !transactionId.trim()}
-                    className="w-2/3 bg-[#C9A84C] text-black font-sans text-[9.5px] tracking-[0.25em] h-[50px] uppercase hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all flex items-center justify-center disabled:opacity-30 disabled:hover:bg-[#C9A84C] disabled:hover:text-black cursor-pointer disabled:cursor-not-allowed"
-                  >
-                    {submittingRegistration ? 'Securing Pass...' : '✓ Done & Claim Ticket'}
-                  </button>
-                </div>
-              </div>
-            )}
-
+            <div className="font-sans text-[9px] text-[#F0EBE3]/30 tracking-wide mt-4">
+              Trouble paying? Contact <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a> or <a href="https://wa.me/917496088484" target="_blank" rel="noopener noreferrer" className="text-[#C9A84C] hover:underline">WhatsApp</a>
+            </div>
           </div>
         </div>
       )}
