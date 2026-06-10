@@ -7,6 +7,8 @@ import nodemailer from 'nodemailer';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { GoogleGenAI } from '@google/genai';
+import crypto from 'crypto';
+import Razorpay from 'razorpay';
 
 const firebaseConfigStatic = {
   projectId: "teak-dialect-t71nt",
@@ -88,6 +90,9 @@ interface Registration {
   aiExtractedSenderName?: string;
   aiVerificationStatus?: 'verified' | 'unclear' | 'invalid' | 'not_analyzed';
   aiFeedback?: string;
+  // --- Razorpay Fields ---
+  razorpayPaymentId?: string;
+  razorpayOrderId?: string;
 }
 
 // Lazy initialization of Gemini client
@@ -500,6 +505,69 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 export { app };
 
+// ─── RAZORPAY SETUP ───────────────────────────────────────────
+let razorpayInstance: Razorpay | null = null;
+function getRazorpay() {
+  if (!razorpayInstance) {
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) {
+      throw new Error('Razorpay keys missing in environment variables.');
+    }
+    razorpayInstance = new Razorpay({ key_id: keyId, key_secret: keySecret });
+  }
+  return razorpayInstance;
+}
+
+// API: Create Razorpay Order
+app.post('/api/create-order', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount || amount < 100) {
+      return res.status(400).json({ error: 'Invalid amount.' });
+    }
+    const rzp = getRazorpay();
+    const order = await rzp.orders.create({
+      amount: Math.round(amount * 100), // rupees → paise
+      currency: 'INR',
+      receipt: 'rcpt_' + Date.now(),
+    });
+    res.json({
+      order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key_id: process.env.RAZORPAY_KEY_ID,
+    });
+  } catch (err: any) {
+    console.error('Create order error:', err);
+    res.status(500).json({ error: err.message || 'Could not create order.' });
+  }
+});
+
+// API: Verify Razorpay Payment Signature
+app.post('/api/verify-payment', async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ verified: false, error: 'Missing payment fields.' });
+    }
+    const secret = process.env.RAZORPAY_KEY_SECRET || '';
+    const generated = crypto
+      .createHmac('sha256', secret)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex');
+
+    if (generated === razorpay_signature) {
+      return res.json({ verified: true });
+    } else {
+      return res.status(400).json({ verified: false, error: 'Signature mismatch.' });
+    }
+  } catch (err: any) {
+    console.error('Verify payment error:', err);
+    res.status(500).json({ verified: false, error: err.message });
+  }
+});
+
 // API: Health / Ping
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
@@ -521,7 +589,10 @@ app.get('/api/health', (req, res) => {
         dietary,
         ticket,
         transactionId,
-        screenshotImage
+        screenshotImage,
+        razorpayPaymentId,
+        razorpayOrderId,
+        paymentVerified
       } = req.body;
 
       // Detailed validation of mandatory fields
@@ -563,6 +634,9 @@ app.get('/api/health', (req, res) => {
         console.log(`🤖 Gemini verification result for ${firstName}:`, aiResult);
       }
 
+      // Razorpay verified payments are auto-confirmed
+      const isPaymentVerified = paymentVerified === true || !!razorpayPaymentId;
+
       const newRecord: Registration = {
         id: 'reg_' + Math.random().toString(36).substr(2, 9),
         firstName,
@@ -576,10 +650,12 @@ app.get('/api/health', (req, res) => {
         heardFrom: heardFrom || 'Not specified',
         dietary: dietary || 'No restrictions',
         ticket,
-        status: 'Pending Verification',
+        status: isPaymentVerified ? 'Verified' : 'Pending Verification',
         timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-        transactionId: transactionId || 'Not provided',
+        transactionId: transactionId || (razorpayPaymentId ? `Razorpay: ${razorpayPaymentId}` : 'Not provided'),
         screenshotImage: screenshotImage || '',
+        razorpayPaymentId: razorpayPaymentId || '',
+        razorpayOrderId: razorpayOrderId || '',
         ...aiResult
       };
 
@@ -604,7 +680,89 @@ app.get('/api/health', (req, res) => {
         origin = 'https://ignyt.co.in';
       }
 
-      // 📩 Trigger Email to User: Pending Verification
+      // ══════════════════════════════════════════════════════════
+      // BRANCH A: Razorpay VERIFIED payment → send CONFIRMED ticket
+      // ══════════════════════════════════════════════════════════
+      if (isPaymentVerified) {
+        const verifiedSubject = `🎟️ Booking Confirmed! Your Ticket is Ready — Summer Pool Party (IGNYT Co.)`;
+        const verifiedBody = `Hi ${firstName},\n\n` +
+          `Your payment was successful and your spot is officially CONFIRMED! 🎉\n\n` +
+          `Here is your admission ticket:\n` +
+          `--------------------------------------------------\n` +
+          `🎟️ ADMISSION TICKET ID: ${newRecord.id}\n` +
+          `👤 TICKET HOLDER: ${firstName} ${lastName}\n` +
+          `⚡ TICKET TYPE: ${ticket}\n` +
+          `💳 PAYMENT ID: ${razorpayPaymentId || 'N/A'}\n` +
+          `📍 EVENT: Summer Pool Party\n` +
+          `🗺️ VENUE: Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali\n` +
+          `📅 DATE: Saturday, 13 June\n` +
+          `🕗 TIME: 8:00 PM Onwards\n` +
+          `👔 DRESS CODE: All Black + Neon accessories\n` +
+          `🍹 INCLUSION: Complimentary food and drink included (BYOB welcome)\n` +
+          `--------------------------------------------------\n\n` +
+          `⚠️ Note: Please keep this email safe. Show this Ticket ID (${newRecord.id}) at the gate along with a valid Government ID (18+ Mandatory) for entry.\n\n` +
+          `See you on the dance floor!\n\n` +
+          `— IGNYT Co. Team\n` +
+          `${origin}`;
+
+        const verifiedHtml = buildHtmlEmail(
+          'Booking Confirmed! — IGNYT Co.',
+          'Your pool party ticket is confirmed.',
+          `
+          <div class="badge-verified">Status: Confirmed & Paid</div>
+          <h1>Congratulations ${firstName}!</h1>
+          <p>Your payment was successful and your spot at the <a href="${origin}" style="color: #C9A84C; text-decoration: none; font-weight: 600;">IGNYT.CO</a> <strong>Summer Pool Party</strong> is officially confirmed.</p>
+          <div class="specs-grid" style="border: 2px solid #C9A84C;">
+            <div class="spec-row" style="background-color: rgba(201, 168, 76, 0.05);">
+              <div class="spec-label">Official Ticket ID</div>
+              <div class="spec-value" style="font-family: monospace; font-size: 16px; color: #C9A84C; font-weight: bold; text-transform: uppercase;">${newRecord.id}</div>
+            </div>
+            <div class="spec-row"><div class="spec-label">Ticket Holder</div><div class="spec-value">${firstName} ${lastName}</div></div>
+            <div class="spec-row"><div class="spec-label">Ticket Type</div><div class="spec-value">${ticket}</div></div>
+            <div class="spec-row"><div class="spec-label">Payment ID</div><div class="spec-value" style="font-family: monospace; font-size: 12px;">${razorpayPaymentId || 'N/A'}</div></div>
+            <div class="spec-row"><div class="spec-label">Venue</div><div class="spec-value">Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali</div></div>
+            <div class="spec-row"><div class="spec-label">Date</div><div class="spec-value">Saturday, 13 June</div></div>
+            <div class="spec-row"><div class="spec-label">Time</div><div class="spec-value">8:00 PM Onwards</div></div>
+            <div class="spec-row"><div class="spec-label">Dress Code</div><div class="spec-value">All Black + Neon accessories</div></div>
+            <div class="spec-row"><div class="spec-label">Inclusions</div><div class="spec-value">Complimentary food and drink (BYOB welcome)</div></div>
+          </div>
+          <p>⚠️ <strong>Entry Note:</strong> Present this Ticket ID (<strong>${newRecord.id}</strong>) at the gate alongside a valid Government ID (18+ only).</p>
+          <div class="button-container"><a href="${origin}" class="btn" target="_blank">View Website</a></div>
+          `,
+          origin
+        );
+
+        const orgSubject = `✅ NEW PAID BOOKING: ${firstName} ${lastName} — ${ticket}`;
+        const orgBody = `New CONFIRMED & PAID booking via Razorpay:\n\n` +
+          `👤 NAME: ${firstName} ${lastName}\n` +
+          `📧 EMAIL: ${email}\n` +
+          `📞 PHONE: ${phone}\n` +
+          `🎟️ TICKET: ${ticket}\n` +
+          `🏙️ CITY: ${city}\n` +
+          `📸 INSTAGRAM: ${instagram || 'Not shared'}\n` +
+          `💬 DIETARY: ${dietary}\n` +
+          `⚡ HEARD FROM: ${heardFrom}\n` +
+          `💳 RAZORPAY PAYMENT ID: ${razorpayPaymentId || 'N/A'}\n` +
+          `💳 RAZORPAY ORDER ID: ${razorpayOrderId || 'N/A'}\n` +
+          `🆔 TICKET ID: ${newRecord.id}\n` +
+          `⏳ TIME: ${newRecord.timestamp}\n\n` +
+          `This payment is verified by Razorpay. No manual action needed.`;
+
+        res.json({ success: true, registration: newRecord });
+
+        Promise.allSettled([
+          triggerEmail(email, verifiedSubject, verifiedBody, verifiedHtml),
+          triggerEmail('parthdua007@gmail.com', orgSubject, orgBody),
+          triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody)
+        ]).then(results => {
+          console.log('📧 Paid booking emails:', results.map((r, i) => r.status === 'fulfilled' ? `ok[${i}]` : `fail[${i}]`).join(' '));
+        });
+        return;
+      }
+
+      // ══════════════════════════════════════════════════════════
+      // BRANCH B: Legacy UPI flow (pending verification) — kept as backup
+      // ══════════════════════════════════════════════════════════
       const userSubject = `Registration Received — Summer Pool Party 🏊‍♂️ (IGNYT Co.)`;
       const userBody = `Hi ${firstName},\n\n` +
         `Your registration for the Summer Pool Party (IGNYT Co.) has been successfully submitted!\n\n` +
@@ -616,15 +774,8 @@ app.get('/api/health', (req, res) => {
         `🍹 INCLUSION: Complimentary food and drink included (BYOB welcome)\n\n` +
         `⚠️ IMPORTANT: NEXT STEPS\n` +
         `--------------------------------------------------\n` +
-        `Since payments are handled via UPI, your ticket remains PENDING VERIFICATION.\n` +
-        `We have secured your uploaded payment proof and UPI Sender Name/ID (${newRecord.transactionId}) in our records.\n\n` +
-        `🤖 AUTOMATED AI SCREENSHOT PRE-CHECK:\n` +
-        `- Status: ${newRecord.aiVerificationStatus?.toUpperCase()}\n` +
-        `- AI Detected Ref/UTR: ${newRecord.aiExtractedTransactionId || 'Not parsed'}\n` +
-        `- AI Detected Amount: Rs. ${newRecord.aiExtractedAmount || 'Not parsed'}\n` +
-        `- AI Helper Feedback: "${newRecord.aiFeedback}"\n\n` +
-        `Our review team (owners: parthdua007@gmail.com or ignyt@ignyt.co.in) will verify your submission.\n` +
-        `Once payment is confirmed, we will send you your official check-in ticket ID immediately.\n\n` +
+        `Your ticket remains PENDING VERIFICATION until payment is confirmed.\n` +
+        `Our review team will verify your submission and send your official ticket ID.\n\n` +
         `See you soon!\n` +
         `— IGNYT Co. Team\n` +
         `${origin}`;
@@ -635,63 +786,19 @@ app.get('/api/health', (req, res) => {
         `
         <div class="badge-pending">Status: Pending Verification</div>
         <h1>Hi ${firstName},</h1>
-        <p>Your registration for the legendary <a href="${origin}" style="color: #C9A84C; text-decoration: none; font-weight: 600;">IGNYT.CO</a> <strong>Summer Pool Party</strong> has been successfully received and is currently under review.</p>
-        
+        <p>Your registration for the <a href="${origin}" style="color: #C9A84C; text-decoration: none; font-weight: 600;">IGNYT.CO</a> <strong>Summer Pool Party</strong> has been received and is under review.</p>
         <div class="specs-grid">
-          <div class="spec-row">
-            <div class="spec-label">Ticket Choice</div>
-            <div class="spec-value">${ticket}</div>
-          </div>
-          <div class="spec-row">
-            <div class="spec-label">Venue Location</div>
-            <div class="spec-value">Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali</div>
-          </div>
-          <div class="spec-row">
-            <div class="spec-label">Date of Event</div>
-            <div class="spec-value font-bold text-[#C9A84C]">Saturday, 13 June</div>
-          </div>
-          <div class="spec-row">
-            <div class="spec-label">Time</div>
-            <div class="spec-value">8:00 PM Onwards</div>
-          </div>
-          <div class="spec-row">
-            <div class="spec-label">Dress Code</div>
-            <div class="spec-value">All Black + Neon accessories</div>
-          </div>
-          <div class="spec-row">
-            <div class="spec-label">Inclusions</div>
-            <div class="spec-value">Complimentary food and drink included (BYOB welcome, welcome drink provided)</div>
-          </div>
+          <div class="spec-row"><div class="spec-label">Ticket Choice</div><div class="spec-value">${ticket}</div></div>
+          <div class="spec-row"><div class="spec-label">Venue</div><div class="spec-value">Villa Ruhaniyat Farms by Urban Oasis near cgc, Mohali</div></div>
+          <div class="spec-row"><div class="spec-label">Date</div><div class="spec-value">Saturday, 13 June</div></div>
+          <div class="spec-row"><div class="spec-label">Time</div><div class="spec-value">8:00 PM Onwards</div></div>
+          <div class="spec-row"><div class="spec-label">Dress Code</div><div class="spec-value">All Black + Neon accessories</div></div>
         </div>
-        
-        ${newRecord.aiVerificationStatus && newRecord.aiVerificationStatus !== 'not_analyzed' ? `
-        <div style="background-color: rgba(255, 255, 255, 0.02); border: 1px dashed rgba(201, 168, 76, 0.3); padding: 16px; border-radius: 6px; margin-top: 24px; margin-bottom: 24px;">
-          <h4 style="color: #C9A84C; font-size: 11px; text-transform: uppercase; margin-top: 0; margin-bottom: 8px; letter-spacing: 0.15em; font-weight: 600;">🤖 AI Payment Proof Pre-Screening</h4>
-          <p style="font-size: 12.5px; line-height: 1.5; color: rgba(240, 235, 227, 0.8); margin: 0 0 8px 0;">
-             Our auto-screening assistant examined your uploaded screenshot proof:
-          </p>
-          <div style="font-size: 11.5px; font-family: monospace; color: rgba(240, 235, 227, 0.6); line-height: 1.6;">
-            <div>• Detection Status: <strong style="color: ${newRecord.aiVerificationStatus === 'verified' ? '#4CAF50' : newRecord.aiVerificationStatus === 'unclear' ? '#FFA000' : '#F44336'}">${newRecord.aiVerificationStatus.toUpperCase()}</strong></div>
-            ${newRecord.aiExtractedTransactionId ? `<div>• Extracted UPI Ref/UTR: <strong>${newRecord.aiExtractedTransactionId}</strong></div>` : ''}
-            ${newRecord.aiExtractedAmount ? `<div>• Detected Amount: <strong>Rs. ${newRecord.aiExtractedAmount}</strong></div>` : ''}
-            ${newRecord.aiExtractedSenderName ? `<div>• Detected Name: <strong>${newRecord.aiExtractedSenderName}</strong></div>` : ''}
-            ${newRecord.aiFeedback ? `<div style="margin-top: 6px; color: #C9A84C; font-style: italic;">"${newRecord.aiFeedback}"</div>` : ''}
-          </div>
-        </div>
-        ` : ''}
-
-        <h3 style="color: #C9A84C; font-weight: 500; font-size: 15px; margin-top: 24px; text-transform: uppercase; letter-spacing: 0.05em;">⚠️ Next Step: Payment Matching</h3>
-        <p>Since checkout payment is validated via custom UPI receipt statement inspection, our review team will match your submitted UPI Sender Name/ID (<strong>${transactionId}</strong>) against our bank reference statements shortly.</p>
-        <p>As soon as payment matches, your access ticket containing a secure check-in ID will be delivered directly to your inbox.</p>
-        
-        <div class="button-container">
-          <a href="${origin}" class="btn" target="_blank">View Website</a>
-        </div>
+        <div class="button-container"><a href="${origin}" class="btn" target="_blank">View Website</a></div>
         `,
         origin
       );
 
-      // 📩 Trigger Email to Organizer: New Pending Attendee Notification
       const orgSubject = `🚨 New Registration Pending: ${firstName} ${lastName}`;
       const orgBody = `Hey Organizer,\n\n` +
         `A new registrant has claimed payment for the Summer Pool Party:\n\n` +
@@ -705,26 +812,21 @@ app.get('/api/health', (req, res) => {
         `⚡ HEARD FROM: ${heardFrom}\n` +
         `💳 TRANSACTION REF ID: ${newRecord.transactionId || 'Not provided'}\n` +
         `⏳ TIME: ${newRecord.timestamp}\n\n` +
-        `🤖 Automated AI Pre-Verification Summary:\n` +
-        `- AI Detection Status: ${newRecord.aiVerificationStatus?.toUpperCase() || 'NOT_ANALYZED'}\n` +
-        `- AI Extracted UTR / Transaction ID: ${newRecord.aiExtractedTransactionId || 'None detected'}\n` +
+        `🤖 AI Pre-Verification: ${newRecord.aiVerificationStatus?.toUpperCase() || 'NOT_ANALYZED'}\n` +
+        `- AI Extracted UTR: ${newRecord.aiExtractedTransactionId || 'None'}\n` +
         `- AI Extracted Amount: ${newRecord.aiExtractedAmount ? 'Rs. ' + newRecord.aiExtractedAmount : 'None'}\n` +
-        `- AI Extracted Name on Receipt: ${newRecord.aiExtractedSenderName || 'None'}\n` +
-        `- AI Helper Feedback: "${newRecord.aiFeedback}"\n\n` +
-        `Please check the Admin Dashboard or check the payment record against your UPI statement for ${email}'s transaction ID: ${newRecord.transactionId}.\n` +
-        `Once verified, log in to the admin panel and confirm their registration.`;
+        `- AI Feedback: "${newRecord.aiFeedback}"\n\n` +
+        `Please verify in the admin panel.`;
 
-      // Respond to client immediately after Firestore write — don't block on SMTP
       res.json({ success: true, registration: newRecord });
 
-      // Fire emails in background after response is sent (non-blocking)
       Promise.allSettled([
         triggerEmail(email, userSubject, userBody, userHtml),
         triggerEmail('parthdua007@gmail.com', orgSubject, orgBody),
         triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody)
       ]).then(results => {
         const statuses = results.map((r, i) =>
-          r.status === 'fulfilled' ? `email[${i}] sent` : `email[${i}] failed: ${(r as PromiseRejectedResult).reason}`
+          r.status === 'fulfilled' ? `email[${i}] sent` : `email[${i}] failed`
         );
         console.log('📧 Background email results:', statuses.join(' | '));
       }).catch(err => {
