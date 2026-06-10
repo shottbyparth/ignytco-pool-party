@@ -1,0 +1,34 @@
+{
+  "entities": {
+    "Registration": {
+      "title": "Registration",
+      "description": "User registration for Summer Pool Party",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "age": { "type": "number" },
+        "gender": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "city": { "type": "string" },
+        "instagram": { "type": "string" },
+        "heardFrom": { "type": "string" },
+        "dietary": { "type": "string" },
+        "ticket": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending Verification", "Verified"] },
+        "timestamp": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "screenshotImage": { "type": "string" }
+      },
+      "required": ["id", "firstName", "lastName", "email", "phone", "ticket", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "registrations": {
+      "schema": "Registration",
+      "description": "Collection of attendee registrations"
+    }
+  }
+}

@@ -4,6 +4,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 
 dotenv.config();
 
@@ -11,6 +13,29 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const REGISTRATIONS_FILE = path.resolve(process.cwd(), 'registrations.json');
+
+// Load Firebase configuration
+let firebaseConfig: any = {};
+try {
+  const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  }
+} catch (err) {
+  console.error('Error reading firebase config file:', err);
+}
+
+let db: any = null;
+function getDb() {
+  if (!db) {
+    if (!firebaseConfig.projectId) {
+      throw new Error('Firebase configuration is missing or invalid.');
+    }
+    const app = initializeApp(firebaseConfig);
+    db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+  return db;
+}
 
 // Interface for Ticket registration
 interface Registration {
@@ -369,9 +394,12 @@ app.get('/api/health', (req, res) => {
       screenshotImage: screenshotImage || ''
     };
 
-    const currentList = readRegistrations();
-    currentList.push(newRecord);
-    saveRegistrations(currentList);
+    try {
+      const dbInstance = getDb();
+      await setDoc(doc(dbInstance, 'registrations', newRecord.id), newRecord);
+    } catch (dbErr) {
+      console.error('Failed to save registration to Firestore:', dbErr);
+    }
 
     // Dynamic origin calculation for correct link back redirecting
     let origin = req.get('origin') || '';
@@ -477,9 +505,29 @@ app.get('/api/health', (req, res) => {
   });
 
   // API: Admin Fetch Registrations
-  app.get('/api/admin/registrations', (req, res) => {
-    const list = readRegistrations();
-    res.json(list);
+  app.get('/api/admin/registrations', async (req, res) => {
+    try {
+      const dbInstance = getDb();
+      const registrationsCol = collection(dbInstance, 'registrations');
+      const snapshot = await getDocs(registrationsCol);
+      const list = snapshot.docs.map(doc => doc.data() as Registration);
+      
+      // Attempt sorting, safe-guarding incorrect date strings
+      try {
+        list.sort((a, b) => {
+          const tA = new Date(a.timestamp).getTime() || 0;
+          const tB = new Date(b.timestamp).getTime() || 0;
+          return tB - tA;
+        });
+      } catch (sortErr) {
+        console.error('Sorting failed, returning unordered list:', sortErr);
+      }
+
+      res.json(list);
+    } catch (err) {
+      console.error('Error fetching registrations from Firestore:', err);
+      res.status(500).json({ error: 'Failed to fetch registrations.' });
+    }
   });
 
   // API: Admin Verify Registration Status
@@ -489,17 +537,18 @@ app.get('/api/health', (req, res) => {
       return res.status(400).json({ error: 'Missing registration ID' });
     }
 
-    const list = readRegistrations();
-    const index = list.findIndex(r => r.id === id);
+    try {
+      const dbInstance = getDb();
+      const docRef = doc(dbInstance, 'registrations', id);
+      const docSnap = await getDoc(docRef);
 
-    if (index === -1) {
-      return res.status(404).json({ error: 'Registration not found' });
-    }
+      if (!docSnap.exists()) {
+        return res.status(404).json({ error: 'Registration not found' });
+      }
 
-    list[index].status = 'Verified';
-    saveRegistrations(list);
-
-    const record = list[index];
+      await updateDoc(docRef, { status: 'Verified' });
+      const record = docSnap.data() as Registration;
+      record.status = 'Verified';
 
     // Dynamic origin calculation for correct link back redirecting
     let origin = req.get('origin') || '';
@@ -590,24 +639,34 @@ app.get('/api/health', (req, res) => {
     await triggerEmail(record.email, verifiedSubject, verifiedBody, verifiedHtml);
 
     res.json({ success: true, registration: record });
+    } catch (err) {
+      console.error('Error verifying registration:', err);
+      res.status(500).json({ error: 'Failed to verify registration.' });
+    }
   });
 
   // API: Admin Delete Registration
-  app.delete('/api/admin/registration', (req, res) => {
+  app.delete('/api/admin/registration', async (req, res) => {
     const id = (req.body?.id || req.query?.id) as string | undefined;
     if (!id) {
       return res.status(400).json({ error: 'Missing ID' });
     }
 
-    let list = readRegistrations();
-    const exists = list.some(r => r.id === id);
-    if (!exists) {
-      return res.status(404).json({ error: 'Registration not found' });
-    }
+    try {
+      const dbInstance = getDb();
+      const docRef = doc(dbInstance, 'registrations', id);
+      const docSnap = await getDoc(docRef);
 
-    list = list.filter(r => r.id !== id);
-    saveRegistrations(list);
-    res.json({ success: true });
+      if (!docSnap.exists()) {
+        return res.status(404).json({ error: 'Registration not found' });
+      }
+
+      await deleteDoc(docRef);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Error deleting registration:', err);
+      res.status(500).json({ error: 'Failed to delete registration.' });
+    }
   });
 
   // API: Contact Submission
