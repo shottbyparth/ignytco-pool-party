@@ -136,9 +136,9 @@ function getTransporter() {
     tls: {
       rejectUnauthorized: false
     },
-    connectionTimeout: 2500, // 2.5s connection timeout to fail early if SMTP port is blocked
-    greetingTimeout: 2000,   // 2s greeting message timeout
-    socketTimeout: 5000,     // 5s idle socket timeout
+    connectionTimeout: 8000, // 8s — GoDaddy SMTP can be slow from cloud IPs
+    greetingTimeout: 5000,   // 5s greeting timeout
+    socketTimeout: 10000,    // 10s idle socket timeout
   });
 }
 
@@ -154,7 +154,7 @@ function logEmailLocal(to: string, subject: string, body: string) {
   console.log(logMsg);
   
   try {
-    const logFile = path.resolve(process.cwd(), 'sent_emails.log');
+    const logFile = path.resolve('/tmp', 'sent_emails.log');
     fs.appendFileSync(logFile, logMsg, 'utf-8');
   } catch (err) {
     console.error('Error appending email logs back to file:', err);
@@ -551,18 +551,22 @@ app.get('/api/health', (req, res) => {
         `Please check the Admin Dashboard or check the payment record against your UPI statement for ${email}'s transaction ID: ${newRecord.transactionId}.\n` +
         `Once verified, log in to the admin panel and confirm their registration.`;
 
-      // Fire emails concurrently in parallel to prevent SMTP connection delay timeouts on serverless functions
-      try {
-        await Promise.allSettled([
-          triggerEmail(email, userSubject, userBody, userHtml),
-          triggerEmail('parthdua007@gmail.com', orgSubject, orgBody),
-          triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody)
-        ]);
-      } catch (emailErr) {
-        console.error('Non-blocking Email trigger failure:', emailErr);
-      }
-
+      // Respond to client immediately after Firestore write — don't block on SMTP
       res.json({ success: true, registration: newRecord });
+
+      // Fire emails in background after response is sent (non-blocking)
+      Promise.allSettled([
+        triggerEmail(email, userSubject, userBody, userHtml),
+        triggerEmail('parthdua007@gmail.com', orgSubject, orgBody),
+        triggerEmail('ignyt@ignyt.co.in', orgSubject, orgBody)
+      ]).then(results => {
+        const statuses = results.map((r, i) =>
+          r.status === 'fulfilled' ? `email[${i}] sent` : `email[${i}] failed: ${(r as PromiseRejectedResult).reason}`
+        );
+        console.log('📧 Background email results:', statuses.join(' | '));
+      }).catch(err => {
+        console.error('Background email batch error:', err);
+      });
     } catch (err: any) {
       console.error('Detailed core exception inside app.post(/api/register):', err);
       res.status(500).json({ error: err.message || 'Internal server registration failure.' });
@@ -701,9 +705,13 @@ app.get('/api/health', (req, res) => {
       origin
     );
 
-    await triggerEmail(record.email, verifiedSubject, verifiedBody, verifiedHtml);
-
+    // Respond immediately — don't block on SMTP for verification email
     res.json({ success: true, registration: record });
+
+    // Send verification email in background after response
+    triggerEmail(record.email, verifiedSubject, verifiedBody, verifiedHtml)
+      .then(sent => console.log(`📧 Verification email ${sent ? 'sent' : 'failed (logged)'} to ${record.email}`))
+      .catch(err => console.error('Verification email background error:', err));
     } catch (err) {
       console.error('Error verifying registration:', err);
       res.status(500).json({ error: 'Failed to verify registration.' });
@@ -809,4 +817,3 @@ startServer().catch(err => {
 });
 
 // Trigger comment for clean Git sync and automatic Vercel deployment activation
-
