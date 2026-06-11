@@ -120,6 +120,7 @@ export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [bookingId, setBookingId] = useState('');
+  const [cart, setCart] = useState({ t1: 0, t2: 0, t3: 0 });
   const [submittingRegistration, setSubmittingRegistration] = useState(false);
   const [paymentError, setPaymentError] = useState('');
 
@@ -133,9 +134,35 @@ export default function App() {
 
   // Ticket Pricing config
   const pricingData = {
-    t1: { name: 'Female Entry Pass', amount: 999, label: 'Standard Pass', sex: 'Female' },
-    t2: { name: 'Male Entry Pass', amount: 1499, label: 'Standard Pass', sex: 'Male' },
-    t3: { name: 'Couple Entry Pass (2 Persons)', amount: 1999, label: 'Standard Pass', sex: 'Couple' },
+    t1: { name: 'Female Entry Pass', amount: 999, label: 'Standard Pass', sex: 'Female', heads: 1 },
+    t2: { name: 'Male Entry Pass', amount: 1499, label: 'Standard Pass', sex: 'Male', heads: 1 },
+    t3: { name: 'Couple Entry Pass (2 Persons)', amount: 1999, label: 'Standard Pass', sex: 'Couple', heads: 2 },
+  };
+
+  // Bulk discount: total headcount of 5 or more → 10% off.
+  // A couple pass counts as 2 people; male/female count as 1 each.
+  const DISCOUNT_MIN_HEADS = 5;
+  const DISCOUNT_RATE = 0.10;
+
+  // Compute everything from the cart {t1, t2, t3} quantities
+  const computeCart = (c: { t1: number; t2: number; t3: number }) => {
+    const items = (['t1', 't2', 't3'] as const)
+      .filter((k) => (c[k] || 0) > 0)
+      .map((k) => ({
+        key: k,
+        name: pricingData[k].name,
+        unit: pricingData[k].amount,
+        qty: c[k],
+        heads: pricingData[k].heads * c[k],
+        lineTotal: pricingData[k].amount * c[k],
+      }));
+    const totalTickets = (c.t1 || 0) + (c.t2 || 0) + (c.t3 || 0);
+    const headcount = items.reduce((s, it) => s + it.heads, 0);
+    const subtotal = items.reduce((s, it) => s + it.lineTotal, 0);
+    const discountApplied = headcount >= DISCOUNT_MIN_HEADS;
+    const discount = discountApplied ? Math.round(subtotal * DISCOUNT_RATE) : 0;
+    const total = subtotal - discount;
+    return { items, totalTickets, headcount, subtotal, discount, total, discountApplied };
   };
 
   // Nav scroll listener
@@ -292,7 +319,7 @@ export default function App() {
 
     if (!formData.city) errors.city = 'Coming city is required';
     if (!formData.heardFrom) errors.heardFrom = 'This field is required';
-    if (!formData.ticket) errors.ticket = 'Please select a ticket option';
+    if (((cart.t1 || 0) + (cart.t2 || 0) + (cart.t3 || 0)) < 1) errors.ticket = 'Please add at least one ticket';
 
     const allConsented = Object.values(consents).every(val => val === true);
     if (!allConsented) {
@@ -323,13 +350,15 @@ export default function App() {
     setSubmittingRegistration(true);
 
     try {
-      const selectedPricing = pricingData[formData.ticket as keyof typeof pricingData];
-      const qty = Math.max(1, parseInt(formData.quantity) || 1);
-      const unitAmount = selectedPricing.amount;
-      const amount = unitAmount * qty;
-      const ticketDescription = qty > 1
-        ? `${qty} × ${selectedPricing.name} (₹${unitAmount} each) — ₹${amount} total`
-        : `${selectedPricing.name} — ₹${amount}`;
+      const cartInfo = computeCart(cart);
+      const { items, totalTickets, headcount, subtotal, discount, total, discountApplied } = cartInfo;
+      const amount = total;
+
+      // Build a readable description of everything in the cart
+      const itemsText = items.map(it => `${it.qty} × ${it.name} (₹${it.unit} each)`).join(' + ');
+      const ticketDescription = discountApplied
+        ? `${itemsText} — Subtotal ₹${subtotal}, 10% group discount −₹${discount}, Total ₹${total}`
+        : `${itemsText} — ₹${subtotal} total`;
 
       // 1. Load Razorpay script
       const loaded = await loadRazorpayScript();
@@ -352,7 +381,12 @@ export default function App() {
         heardFrom: formData.heardFrom,
         dietary: formData.dietary,
         ticket: ticketDescription,
-        quantity: qty,
+        quantity: totalTickets,
+        headcount: headcount,
+        cart: items.map(it => ({ name: it.name, qty: it.qty, unit: it.unit, lineTotal: it.lineTotal })),
+        subtotal,
+        discount,
+        total,
       };
 
       const orderRes = await fetch('/api/create-order', {
@@ -376,7 +410,7 @@ export default function App() {
         amount: orderData.amount,
         currency: orderData.currency,
         name: 'IGNYT.CO',
-        description: `${selectedPricing.name} — Summer Pool Party`,
+        description: `${totalTickets} ticket(s) — Summer Pool Party`,
         order_id: orderData.order_id,
         prefill: {
           name: `${formData.firstName} ${formData.lastName}`,
@@ -417,6 +451,7 @@ export default function App() {
                 email: '', city: '', instagram: '', heardFrom: '',
                 dietary: 'No restrictions', ticket: '', quantity: '1',
               });
+              setCart({ t1: 0, t2: 0, t3: 0 });
               setConsents({ c1: false, c2: false, c3: false, c4: false });
               setCurrentTab('success');
               window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1187,74 +1222,97 @@ export default function App() {
 
             </div>
 
-            {/* TICKET TYPE SELECTOR INPUT */}
+            {/* TICKET CART */}
             <div className="flex flex-col gap-3 mt-4" id="ticket">
-              <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Select Your Pass Type *</label>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <label className={`border p-5 text-center cursor-pointer transition-all flex flex-col justify-between items-center ${
-                  formData.ticket === 't1' 
-                    ? 'border-[#C9A84C] bg-[#C9A84C]/10' 
-                    : 'border-white/5 bg-[#0F0F0F] hover:border-[#C9A84C]/20'
-                }`}>
-                  <input 
-                    type="radio" 
-                    name="ticket" 
-                    className="hidden" 
-                    value="t1" 
-                    checked={formData.ticket === 't1'}
-                    onChange={() => {
-                      setFormData({...formData, ticket: 't1'});
-                      if(formErrors.ticket) setFormErrors({...formErrors, ticket: ''});
-                    }}
-                  />
-                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#C9A84C] mb-1">🎟️ Female</span>
-                  <span className="font-serif-cormorant text-lg text-white font-medium">Female Pass</span>
-                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹999</span>
-                </label>
+              <label className="font-sans text-[8.5px] tracking-[0.4em] text-[#C9A84C] uppercase">Choose Your Passes *</label>
 
-                <label className={`border p-5 text-center cursor-pointer transition-all flex flex-col justify-between items-center ${
-                  formData.ticket === 't2' 
-                    ? 'border-[#C9A84C] bg-[#C9A84C]/10' 
-                    : 'border-white/5 bg-[#0F0F0F] hover:border-[#C9A84C]/20'
-                }`}>
-                  <input 
-                    type="radio" 
-                    name="ticket" 
-                    className="hidden" 
-                    value="t2" 
-                    checked={formData.ticket === 't2'}
-                    onChange={() => {
-                      setFormData({...formData, ticket: 't2'});
-                      if(formErrors.ticket) setFormErrors({...formErrors, ticket: ''});
-                    }}
-                  />
-                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#C9A84C] mb-1">🎟️ Male</span>
-                  <span className="font-serif-cormorant text-lg text-white font-medium">Male Pass</span>
-                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹1,499</span>
-                </label>
-
-                <label className={`border p-5 text-center cursor-pointer transition-all flex flex-col justify-between items-center ${
-                  formData.ticket === 't3' 
-                    ? 'border-[#C9A84C] bg-[#C9A84C]/10' 
-                    : 'border-white/5 bg-[#0F0F0F] hover:border-[#C9A84C]/20'
-                }`}>
-                  <input 
-                    type="radio" 
-                    name="ticket" 
-                    className="hidden" 
-                    value="t3" 
-                    checked={formData.ticket === 't3'}
-                    onChange={() => {
-                      setFormData({...formData, ticket: 't3'});
-                      if(formErrors.ticket) setFormErrors({...formErrors, ticket: ''});
-                    }}
-                  />
-                  <span className="font-sans text-[7.5px] tracking-[0.3em] uppercase text-[#F0EBE3]/30 mb-1">🎟️ Couple</span>
-                  <span className="font-serif-cormorant text-lg text-white font-medium">Couple Pass</span>
-                  <span className="font-serif-cormorant text-sm text-[#F0EBE3]/50 mt-1">₹1,999</span>
-                </label>
+              <div className="bg-gradient-to-r from-[#C9A84C]/15 to-[#C9A84C]/5 border border-[#C9A84C]/30 rounded-lg px-4 py-3 flex items-center gap-2">
+                <span className="text-lg">🎉</span>
+                <span className="font-sans text-xs text-[#F0EBE3]/90 leading-snug">
+                  <strong className="text-[#C9A84C]">Group offer:</strong> Book for <strong className="text-white">5 or more people</strong> and get <strong className="text-[#C9A84C]">10% OFF</strong> your total. Mix any passes — a couple pass counts as 2 people.
+                </span>
               </div>
+
+              <div className="flex flex-col gap-3">
+                {(['t1', 't2', 't3'] as const).map((key) => {
+                  const p = pricingData[key];
+                  const qty = cart[key] || 0;
+                  return (
+                    <div key={key} className={`border rounded-lg p-4 flex items-center justify-between gap-3 transition-all ${qty > 0 ? 'border-[#C9A84C]/60 bg-[#C9A84C]/5' : 'border-white/5 bg-[#0F0F0F]'}`}>
+                      <div className="text-left">
+                        <div className="font-serif-cormorant text-lg text-white font-medium leading-tight">{p.name}</div>
+                        <div className="font-sans text-xs text-[#F0EBE3]/50 mt-0.5">
+                          ₹{p.amount.toLocaleString('en-IN')}{key === 't3' ? ' · 2 people' : ' · 1 person'}
+                        </div>
+                      </div>
+                      <div className="flex items-center border border-[#C9A84C]/40 rounded shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCart({ ...cart, [key]: Math.max(0, qty - 1) });
+                            if (formErrors.ticket) setFormErrors({ ...formErrors, ticket: '' });
+                          }}
+                          className="w-9 h-9 text-[#C9A84C] text-lg hover:bg-[#C9A84C]/10 transition-colors disabled:opacity-30"
+                          disabled={qty <= 0}
+                        >
+                          −
+                        </button>
+                        <span className="w-10 text-center font-serif-cormorant text-xl text-white select-none">{qty}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCart({ ...cart, [key]: Math.min(30, qty + 1) });
+                            if (formErrors.ticket) setFormErrors({ ...formErrors, ticket: '' });
+                          }}
+                          className="w-9 h-9 text-[#C9A84C] text-lg hover:bg-[#C9A84C]/10 transition-colors disabled:opacity-30"
+                          disabled={qty >= 30}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Live cart summary */}
+              {(() => {
+                const c = computeCart(cart);
+                if (c.totalTickets === 0) return null;
+                return (
+                  <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 mt-1">
+                    {c.items.map((it) => (
+                      <div key={it.key} className="flex justify-between font-sans text-xs text-[#F0EBE3]/70 mb-1.5">
+                        <span>{it.qty} × {it.name}</span>
+                        <span>₹{it.lineTotal.toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                    <div className="font-sans text-[10px] text-[#F0EBE3]/40 mt-1 mb-2">Total people: {c.headcount}</div>
+                    {c.discountApplied ? (
+                      <>
+                        <div className="flex justify-between font-sans text-xs text-[#F0EBE3]/50 pt-2 border-t border-white/5">
+                          <span>Subtotal</span><span>₹{c.subtotal.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div className="flex justify-between font-sans text-xs text-green-400">
+                          <span>🎉 Group discount (10%)</span><span>−₹{c.discount.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div className="flex justify-between font-serif-cormorant text-lg text-[#C9A84C] font-semibold pt-1">
+                          <span>Total</span><span>₹{c.total.toLocaleString('en-IN')}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex justify-between font-serif-cormorant text-lg text-[#C9A84C] font-semibold pt-2 border-t border-white/5">
+                          <span>Total</span><span>₹{c.total.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div className="font-sans text-[10px] text-[#C9A84C]/80 mt-1">
+                          Add {DISCOUNT_MIN_HEADS - c.headcount} more {DISCOUNT_MIN_HEADS - c.headcount === 1 ? 'person' : 'people'} to unlock 10% OFF
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {formErrors.ticket && <span className="font-sans text-xs font-semibold text-red-400 tracking-wider mt-1">{formErrors.ticket}</span>}
             </div>
@@ -1716,51 +1774,52 @@ export default function App() {
             </button>
 
             <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2">Complete Your Booking</div>
-            <h3 className="font-serif-cormorant text-2xl font-light text-white mb-1">
-              {pricingData[formData.ticket as keyof typeof pricingData]?.name || 'Pass Admission'}
+            <h3 className="font-serif-cormorant text-2xl font-light text-white mb-4">
+              Summer Pool Party
             </h3>
 
-            <div className="font-sans text-[10px] text-[#F0EBE3]/40 mb-4">
-              ₹{(pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0).toLocaleString('en-IN')} each
-            </div>
+            {/* Cart summary + discount */}
+            {(() => {
+              const c = computeCart(cart);
+              return (
+                <>
+                  <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 mb-4 text-left">
+                    {c.items.map((it) => (
+                      <div key={it.key} className="flex justify-between font-sans text-xs text-[#F0EBE3]/70 mb-1.5">
+                        <span>{it.qty} × {it.name}</span>
+                        <span>₹{it.lineTotal.toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                    <div className="font-sans text-[10px] text-[#F0EBE3]/40 mt-1">Total people: {c.headcount}</div>
+                  </div>
 
-            {/* Quantity stepper */}
-            <div className="flex items-center justify-center gap-5 mb-5">
-              <span className="font-sans text-[9px] tracking-[0.3em] text-[#C9A84C] uppercase">Quantity</span>
-              <div className="flex items-center border border-[#C9A84C]/40 rounded">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const q = Math.max(1, (parseInt(formData.quantity) || 1) - 1);
-                    setFormData({ ...formData, quantity: String(q) });
-                  }}
-                  className="w-10 h-10 text-[#C9A84C] text-xl hover:bg-[#C9A84C]/10 transition-colors disabled:opacity-30"
-                  disabled={(parseInt(formData.quantity) || 1) <= 1}
-                >
-                  −
-                </button>
-                <span className="w-12 text-center font-serif-cormorant text-2xl text-white select-none">
-                  {parseInt(formData.quantity) || 1}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const q = Math.min(20, (parseInt(formData.quantity) || 1) + 1);
-                    setFormData({ ...formData, quantity: String(q) });
-                  }}
-                  className="w-10 h-10 text-[#C9A84C] text-xl hover:bg-[#C9A84C]/10 transition-colors disabled:opacity-30"
-                  disabled={(parseInt(formData.quantity) || 1) >= 20}
-                >
-                  +
-                </button>
-              </div>
-            </div>
+                  {c.discountApplied && (
+                    <div className="bg-green-500/10 border border-green-500/30 rounded-full px-4 py-2 mb-4 inline-block">
+                      <span className="font-sans text-[10px] tracking-wide text-green-400 font-semibold">🎉 10% Group Discount Applied!</span>
+                    </div>
+                  )}
 
-            <div className="font-sans text-[9px] tracking-[0.3em] text-[#F0EBE3]/40 uppercase mb-1">Total Payable</div>
-            <div className="font-serif-cormorant text-4xl md:text-5xl text-[#C9A84C] font-semibold leading-none mb-6">
-              <span className="text-xl font-light mr-0.5">₹</span>
-              {((pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0) * (parseInt(formData.quantity) || 1)).toLocaleString('en-IN')}
-            </div>
+                  {c.discountApplied && (
+                    <div className="flex flex-col gap-1 mb-3 max-w-[280px] mx-auto">
+                      <div className="flex justify-between font-sans text-[11px] text-[#F0EBE3]/50">
+                        <span>Subtotal</span>
+                        <span>₹{c.subtotal.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between font-sans text-[11px] text-green-400">
+                        <span>Group discount (10%)</span>
+                        <span>−₹{c.discount.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="font-sans text-[9px] tracking-[0.3em] text-[#F0EBE3]/40 uppercase mb-1">Total Payable</div>
+                  <div className="font-serif-cormorant text-4xl md:text-5xl text-[#C9A84C] font-semibold leading-none mb-6">
+                    <span className="text-xl font-light mr-0.5">₹</span>
+                    {c.total.toLocaleString('en-IN')}
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="w-10 h-[1.5px] bg-[#C9A84C]/30 mx-auto mb-6" />
 
@@ -1790,7 +1849,7 @@ export default function App() {
               disabled={submittingRegistration}
               className="w-full bg-[#C9A84C] text-black font-sans text-[10px] tracking-[0.3em] uppercase p-4 hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              {submittingRegistration ? 'Opening Payment...' : `Pay ₹${((pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0) * (parseInt(formData.quantity) || 1)).toLocaleString('en-IN')} Securely`}
+              {submittingRegistration ? 'Opening Payment...' : `Pay ₹${computeCart(cart).total.toLocaleString('en-IN')} Securely`}
             </button>
 
             <div className="font-sans text-[9px] text-[#F0EBE3]/30 tracking-wide mt-4">
