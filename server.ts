@@ -562,6 +562,10 @@ app.post('/api/create-order', async (req, res) => {
         dietary: reg.dietary || 'No restrictions',
         ticket: reg.ticket || '',
         quantity: Number(reg.quantity) || 1,
+        headcount: Number(reg.headcount) || Number(reg.quantity) || 1,
+        subtotal: Number(reg.subtotal) || 0,
+        discount: Number(reg.discount) || 0,
+        total: Number(reg.total) || 0,
         status: 'Pending Payment',
         timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
         transactionId: 'Awaiting payment',
@@ -631,6 +635,10 @@ app.post('/api/verify-payment', async (req, res) => {
       dietary: reg.dietary || 'No restrictions',
       ticket: ticketDescription,
       quantity: Number(reg.quantity) || 1,
+      headcount: Number(reg.headcount) || Number(reg.quantity) || 1,
+      subtotal: Number(reg.subtotal) || 0,
+      discount: Number(reg.discount) || 0,
+      total: Number(reg.total) || 0,
       // If signature is valid → Verified. If not, still capture it so a paid
       // booking is never lost; org can confirm manually from the dashboard.
       status: signatureValid ? 'Verified' : 'Payment Received - Verify Manually',
@@ -659,7 +667,8 @@ app.post('/api/verify-payment', async (req, res) => {
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `BOOKING ID: ${bookingId}\n` +
       `Pass: ${ticketDescription}\n` +
-      `Tickets: ${record.quantity}\n` +
+      `Tickets: ${record.quantity} (for ${record.headcount} ${record.headcount === 1 ? 'person' : 'people'})\n` +
+      (record.discount > 0 ? `You saved: ₹${record.discount} with the group discount! 🎉\n` : '') +
       `Payment ID: ${razorpay_payment_id}\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
       `EVENT DETAILS\n` +
