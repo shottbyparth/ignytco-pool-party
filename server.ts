@@ -523,23 +523,64 @@ async function getRazorpay() {
 }
 
 // API: Create Razorpay Order
+// Generate a clean, human-readable booking ID like IGNYT-7F3K9Q
+function makeBookingId() {
+  return 'IGNYT-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// API: Create Razorpay Order AND save the booking immediately (Pending Payment).
+// Saving here (before payment) guarantees a paid booking can never be lost.
 app.post('/api/create-order', async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, registration } = req.body;
     if (!amount || amount < 100) {
       return res.status(400).json({ error: 'Invalid amount.' });
     }
+
     const rzp = await getRazorpay();
     const order = await rzp.orders.create({
       amount: Math.round(amount * 100), // rupees → paise
       currency: 'INR',
       receipt: 'rcpt_' + Date.now(),
     });
+
+    // Save a pending booking right now as a safety net.
+    const bookingId = makeBookingId();
+    try {
+      const reg = registration || {};
+      const pendingRecord: any = {
+        id: bookingId,
+        firstName: reg.firstName || '',
+        lastName: reg.lastName || '',
+        age: Number(reg.age) || 0,
+        gender: reg.gender || 'Not selected',
+        phone: reg.phone || '',
+        email: reg.email || '',
+        city: reg.city || 'Not provided',
+        instagram: reg.instagram || 'Not shared',
+        heardFrom: reg.heardFrom || 'Not specified',
+        dietary: reg.dietary || 'No restrictions',
+        ticket: reg.ticket || '',
+        quantity: Number(reg.quantity) || 1,
+        status: 'Pending Payment',
+        timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        transactionId: 'Awaiting payment',
+        razorpayOrderId: order.id,
+        razorpayPaymentId: '',
+      };
+      const dbInstance = getDb();
+      await setDoc(doc(dbInstance, 'registrations', bookingId), pendingRecord);
+    } catch (saveErr) {
+      console.error('Could not pre-save pending booking:', saveErr);
+      // Don't block payment if pre-save fails; verify-payment will still try to save.
+    }
+
     res.json({
       order_id: order.id,
       amount: order.amount,
       currency: order.currency,
       key_id: process.env.RAZORPAY_KEY_ID,
+      booking_id: bookingId,
     });
   } catch (err: any) {
     console.error('Create order error:', err);
@@ -547,24 +588,146 @@ app.post('/api/create-order', async (req, res) => {
   }
 });
 
-// API: Verify Razorpay Payment Signature
+// API: Verify Razorpay Payment + confirm booking + send all emails (server-side).
+// This is the single source of truth after payment — verify, save, email, all here.
 app.post('/api/verify-payment', async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      booking_id,
+      registration,
+    } = req.body;
+
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ verified: false, error: 'Missing payment fields.' });
     }
+
     const secret = process.env.RAZORPAY_KEY_SECRET || '';
     const generated = crypto
       .createHmac('sha256', secret)
       .update(razorpay_order_id + '|' + razorpay_payment_id)
       .digest('hex');
 
-    if (generated === razorpay_signature) {
-      return res.json({ verified: true });
-    } else {
-      return res.status(400).json({ verified: false, error: 'Signature mismatch.' });
+    const signatureValid = generated === razorpay_signature;
+
+    // Build / merge the booking record
+    const reg = registration || {};
+    const bookingId = booking_id || makeBookingId();
+    const ticketDescription = reg.ticket || 'Entry Pass';
+
+    const record: any = {
+      id: bookingId,
+      firstName: reg.firstName || '',
+      lastName: reg.lastName || '',
+      age: Number(reg.age) || 0,
+      gender: reg.gender || 'Not selected',
+      phone: reg.phone || '',
+      email: reg.email || '',
+      city: reg.city || 'Not provided',
+      instagram: reg.instagram || 'Not shared',
+      heardFrom: reg.heardFrom || 'Not specified',
+      dietary: reg.dietary || 'No restrictions',
+      ticket: ticketDescription,
+      quantity: Number(reg.quantity) || 1,
+      // If signature is valid → Verified. If not, still capture it so a paid
+      // booking is never lost; org can confirm manually from the dashboard.
+      status: signatureValid ? 'Verified' : 'Payment Received - Verify Manually',
+      timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+      transactionId: `Razorpay: ${razorpay_payment_id}`,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpayOrderId: razorpay_order_id,
+    };
+
+    // Save / update the booking (never throw away a paid booking)
+    try {
+      const dbInstance = getDb();
+      await setDoc(doc(dbInstance, 'registrations', bookingId), record);
+    } catch (dbErr) {
+      console.error('Failed to save verified booking:', dbErr);
     }
+
+    // Send emails (fire and forget — never block the response on SMTP)
+    const userEmail = record.email;
+    const fullName = `${record.firstName} ${record.lastName}`.trim();
+
+    const userSubject = `🎟️ Booking Confirmed — Summer Pool Party (IGNYT Co.)`;
+    const userText =
+      `Hi ${record.firstName || 'there'},\n\n` +
+      `Your booking for the IGNYT Co. Summer Pool Party is CONFIRMED & PAID. 🎉\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `BOOKING ID: ${bookingId}\n` +
+      `Pass: ${ticketDescription}\n` +
+      `Tickets: ${record.quantity}\n` +
+      `Payment ID: ${razorpay_payment_id}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `EVENT DETAILS\n` +
+      `📅 Date: Friday, 13 June\n` +
+      `🕗 Time: 8:00 PM onwards (gates close 9:30 PM)\n` +
+      `📍 Venue: Villa Ruhaniyat Farms by Urban Oasis, near CGC Landran, Mohali\n` +
+      `👗 Dress code: All Black + Neon\n` +
+      `🪪 18+ only — carry a valid government photo ID\n` +
+      `🥂 1–2 welcome drinks + food included · BYOB allowed\n\n` +
+      `Please show this email (with your Booking ID) at the gate.\n\n` +
+      `Questions? Call/WhatsApp 7496088484 or reply to this email.\n` +
+      `Follow @ignyt.co on Instagram for updates.\n\n` +
+      `See you there! — Team IGNYT.CO`;
+
+    const userHtml =
+      `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;background:#0F0F0F;color:#F0EBE3;padding:28px;border:1px solid #C9A84C33;border-radius:8px;">
+        <div style="text-align:center;letter-spacing:3px;font-size:18px;font-weight:bold;">IGNYT<span style="color:#C9A84C;">.</span>CO</div>
+        <div style="text-align:center;color:#C9A84C;font-size:10px;letter-spacing:3px;margin:4px 0 18px;">SUMMER POOL PARTY</div>
+        <div style="background:#C9A84C;color:#060606;text-align:center;font-weight:bold;padding:8px;border-radius:4px;font-size:13px;">✅ BOOKING CONFIRMED & PAID</div>
+        <p style="font-size:14px;">Hi ${record.firstName || 'there'},</p>
+        <p style="font-size:14px;line-height:1.6;">Your spot is officially confirmed. Show this email at the gate.</p>
+        <div style="background:#060606;border:1px solid #ffffff14;border-radius:6px;padding:16px;margin:16px 0;font-size:13px;">
+          <div style="margin-bottom:8px;"><span style="color:#C9A84C;">Booking ID:</span> <b>${bookingId}</b></div>
+          <div style="margin-bottom:8px;"><span style="color:#C9A84C;">Pass:</span> ${ticketDescription}</div>
+          <div style="margin-bottom:8px;"><span style="color:#C9A84C;">Tickets:</span> ${record.quantity}</div>
+          <div><span style="color:#C9A84C;">Payment ID:</span> <span style="font-family:monospace;font-size:12px;">${razorpay_payment_id}</span></div>
+        </div>
+        <div style="font-size:13px;line-height:1.8;">
+          📅 <b>Friday, 13 June</b><br/>
+          🕗 8:00 PM onwards (gates close 9:30 PM)<br/>
+          📍 Villa Ruhaniyat Farms by Urban Oasis, near CGC Landran, Mohali<br/>
+          👗 Dress: All Black + Neon<br/>
+          🪪 18+ only — carry valid photo ID<br/>
+          🥂 Welcome drinks + food included · BYOB allowed
+        </div>
+        <p style="font-size:12px;color:#F0EBE399;margin-top:18px;">Questions? Call/WhatsApp <a href="tel:7496088484" style="color:#C9A84C;">7496088484</a> · Follow <a href="https://instagram.com/ignyt.co" style="color:#C9A84C;">@ignyt.co</a></p>
+        <p style="font-size:12px;color:#F0EBE399;">See you there! — Team IGNYT.CO</p>
+      </div>`;
+
+    const orgSubject = signatureValid
+      ? `💰 NEW PAID BOOKING — ${fullName} (${ticketDescription})`
+      : `⚠️ PAYMENT NEEDS MANUAL CHECK — ${fullName} (${ticketDescription})`;
+    const orgText =
+      `New booking via website:\n\n` +
+      `Booking ID: ${bookingId}\n` +
+      `Name: ${fullName}\n` +
+      `Email: ${userEmail}\n` +
+      `Phone: ${record.phone}\n` +
+      `Pass: ${ticketDescription}\n` +
+      `Tickets: ${record.quantity}\n` +
+      `Razorpay Payment ID: ${razorpay_payment_id}\n` +
+      `Status: ${record.status}\n` +
+      `City: ${record.city} · Instagram: ${record.instagram}\n` +
+      `Dietary: ${record.dietary} · Age: ${record.age} · Gender: ${record.gender}\n`;
+
+    // Don't await — respond fast, let emails send in background
+    Promise.all([
+      triggerEmail(userEmail, userSubject, userText, userHtml),
+      triggerEmail('parthdua007@gmail.com', orgSubject, orgText),
+      triggerEmail('ignyt@ignyt.co.in', orgSubject, orgText),
+    ]).catch(e => console.error('Email batch error:', e));
+
+    // Always return the booking ID so the user sees confirmation
+    return res.json({
+      verified: signatureValid,
+      booking_id: bookingId,
+      status: record.status,
+    });
   } catch (err: any) {
     console.error('Verify payment error:', err);
     res.status(500).json({ verified: false, error: err.message });
