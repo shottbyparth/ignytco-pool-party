@@ -38,6 +38,7 @@ interface Registration {
   heardFrom: string;
   dietary: string;
   ticket: string;
+  quantity?: number;
   status: 'Pending Verification' | 'Verified';
   timestamp: string;
   transactionId?: string;
@@ -104,6 +105,7 @@ export default function App() {
     heardFrom: '',
     dietary: 'No restrictions',
     ticket: '',
+    quantity: '1',
   });
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -117,6 +119,7 @@ export default function App() {
   // Flow State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
+  const [bookingId, setBookingId] = useState('');
   const [submittingRegistration, setSubmittingRegistration] = useState(false);
   const [paymentError, setPaymentError] = useState('');
 
@@ -321,8 +324,12 @@ export default function App() {
 
     try {
       const selectedPricing = pricingData[formData.ticket as keyof typeof pricingData];
-      const amount = selectedPricing.amount;
-      const ticketDescription = `${selectedPricing.name} — ₹${amount}`;
+      const qty = Math.max(1, parseInt(formData.quantity) || 1);
+      const unitAmount = selectedPricing.amount;
+      const amount = unitAmount * qty;
+      const ticketDescription = qty > 1
+        ? `${qty} × ${selectedPricing.name} (₹${unitAmount} each) — ₹${amount} total`
+        : `${selectedPricing.name} — ₹${amount}`;
 
       // 1. Load Razorpay script
       const loaded = await loadRazorpayScript();
@@ -332,11 +339,26 @@ export default function App() {
         return;
       }
 
-      // 2. Create order on backend
+      // 2. Create order on backend (also pre-saves the booking as a safety net)
+      const registrationPayload = {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        age: formData.age,
+        gender: formData.gender,
+        phone: formData.phone,
+        email: formData.email,
+        city: formData.city,
+        instagram: formData.instagram,
+        heardFrom: formData.heardFrom,
+        dietary: formData.dietary,
+        ticket: ticketDescription,
+        quantity: qty,
+      };
+
       const orderRes = await fetch('/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount })
+        body: JSON.stringify({ amount, registration: registrationPayload })
       });
 
       if (!orderRes.ok) {
@@ -368,7 +390,7 @@ export default function App() {
           color: '#C9A84C',
         },
         handler: async function (response: any) {
-          // 4. Verify the payment signature on backend
+          // 4. Verify payment + confirm booking + send emails — all server-side
           try {
             const verifyRes = await fetch('/api/verify-payment', {
               method: 'POST',
@@ -377,51 +399,33 @@ export default function App() {
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_signature: response.razorpay_signature,
+                booking_id: orderData.booking_id,
+                registration: registrationPayload,
               })
             });
 
             const verifyData = await verifyRes.json();
 
-            if (verifyData.verified) {
-              // 5. Save the verified registration
-              await fetch('/api/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  firstName: formData.firstName,
-                  lastName: formData.lastName,
-                  age: formData.age,
-                  gender: formData.gender,
-                  phone: formData.phone,
-                  email: formData.email,
-                  city: formData.city,
-                  instagram: formData.instagram,
-                  heardFrom: formData.heardFrom,
-                  dietary: formData.dietary,
-                  ticket: ticketDescription,
-                  razorpayPaymentId: response.razorpay_payment_id,
-                  razorpayOrderId: response.razorpay_order_id,
-                  paymentVerified: true,
-                })
-              });
-
-              // 6. Show success screen
+            // Whether or not the signature verified, the booking is saved
+            // server-side and emails are sent. Show the success screen with the ID.
+            if (verifyData.booking_id) {
+              setBookingId(verifyData.booking_id);
               setRegisteredEmail(formData.email);
               setIsModalOpen(false);
               setFormData({
                 firstName: '', lastName: '', age: '', gender: '', phone: '',
                 email: '', city: '', instagram: '', heardFrom: '',
-                dietary: 'No restrictions', ticket: '',
+                dietary: 'No restrictions', ticket: '', quantity: '1',
               });
               setConsents({ c1: false, c2: false, c3: false, c4: false });
               setCurrentTab('success');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             } else {
-              setPaymentError('Payment could not be verified. If money was deducted, contact us on WhatsApp and we will sort it immediately.');
+              setPaymentError('Payment received but confirmation failed. Your payment ID is ' + response.razorpay_payment_id + '. Please WhatsApp us this ID and we will confirm your booking immediately.');
             }
           } catch (err) {
             console.error('Verify error:', err);
-            setPaymentError('Payment verification failed. If money was deducted, contact us on WhatsApp right away.');
+            setPaymentError('Payment received but confirmation failed. Your payment ID is ' + response.razorpay_payment_id + '. Please WhatsApp us this ID and we will confirm your booking right away.');
           } finally {
             setSubmittingRegistration(false);
           }
@@ -1410,9 +1414,17 @@ export default function App() {
           
           <div className="w-12 h-[1px] bg-[#C9A84C] mx-auto mb-8 opacity-50" />
 
+          {bookingId && (
+            <div className="border border-[#C9A84C]/40 bg-[#C9A84C]/5 rounded-lg p-5 mb-8 max-w-[360px] mx-auto">
+              <div className="font-sans text-[8px] tracking-[0.4em] text-[#C9A84C] uppercase mb-2">Your Booking ID</div>
+              <div className="font-serif-cormorant text-3xl md:text-4xl text-white font-semibold tracking-wider select-all">{bookingId}</div>
+              <div className="font-sans text-[9px] text-[#F0EBE3]/40 tracking-wide mt-2">Screenshot this & show it at the gate</div>
+            </div>
+          )}
+
           <p className="font-sans font-light text-sm text-[#F0EBE3]/60 leading-relaxed tracking-wider mb-10">
             Your spot is officially <strong className="text-white font-medium">confirmed</strong> for the legendary <strong className="text-white font-medium">Summer Pool Party</strong> by IGNYT Co.<br /><br />
-            Your payment was successful and we've dispatched your official ticket with your unique Booking ID to <strong className="text-[#C9A84C] font-normal">{registeredEmail}</strong>.<br /><br />
+            Your payment was successful. A confirmation email with your ticket and all event details is on its way to <strong className="text-[#C9A84C] font-normal">{registeredEmail}</strong> (check spam too).<br /><br />
             <span className="block border border-white/5 bg-[#0F0F0F] p-4 rounded text-xs text-[#F0EBE3]/80 mb-4 text-left font-sans">
               <strong>Need assistance? Contact Organizer:</strong><br />
               📞 Phone: <a href="tel:7496088484" className="text-[#C9A84C] hover:underline">7496088484</a><br />
@@ -1707,10 +1719,47 @@ export default function App() {
             <h3 className="font-serif-cormorant text-2xl font-light text-white mb-1">
               {pricingData[formData.ticket as keyof typeof pricingData]?.name || 'Pass Admission'}
             </h3>
-            
+
+            <div className="font-sans text-[10px] text-[#F0EBE3]/40 mb-4">
+              ₹{(pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0).toLocaleString('en-IN')} each
+            </div>
+
+            {/* Quantity stepper */}
+            <div className="flex items-center justify-center gap-5 mb-5">
+              <span className="font-sans text-[9px] tracking-[0.3em] text-[#C9A84C] uppercase">Quantity</span>
+              <div className="flex items-center border border-[#C9A84C]/40 rounded">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const q = Math.max(1, (parseInt(formData.quantity) || 1) - 1);
+                    setFormData({ ...formData, quantity: String(q) });
+                  }}
+                  className="w-10 h-10 text-[#C9A84C] text-xl hover:bg-[#C9A84C]/10 transition-colors disabled:opacity-30"
+                  disabled={(parseInt(formData.quantity) || 1) <= 1}
+                >
+                  −
+                </button>
+                <span className="w-12 text-center font-serif-cormorant text-2xl text-white select-none">
+                  {parseInt(formData.quantity) || 1}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const q = Math.min(20, (parseInt(formData.quantity) || 1) + 1);
+                    setFormData({ ...formData, quantity: String(q) });
+                  }}
+                  className="w-10 h-10 text-[#C9A84C] text-xl hover:bg-[#C9A84C]/10 transition-colors disabled:opacity-30"
+                  disabled={(parseInt(formData.quantity) || 1) >= 20}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="font-sans text-[9px] tracking-[0.3em] text-[#F0EBE3]/40 uppercase mb-1">Total Payable</div>
             <div className="font-serif-cormorant text-4xl md:text-5xl text-[#C9A84C] font-semibold leading-none mb-6">
               <span className="text-xl font-light mr-0.5">₹</span>
-              {(pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0).toLocaleString('en-IN')}
+              {((pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0) * (parseInt(formData.quantity) || 1)).toLocaleString('en-IN')}
             </div>
 
             <div className="w-10 h-[1.5px] bg-[#C9A84C]/30 mx-auto mb-6" />
@@ -1741,7 +1790,7 @@ export default function App() {
               disabled={submittingRegistration}
               className="w-full bg-[#C9A84C] text-black font-sans text-[10px] tracking-[0.3em] uppercase p-4 hover:bg-transparent hover:text-[#C9A84C] border border-[#C9A84C] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              {submittingRegistration ? 'Opening Payment...' : `Pay ₹${(pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0).toLocaleString('en-IN')} Securely`}
+              {submittingRegistration ? 'Opening Payment...' : `Pay ₹${((pricingData[formData.ticket as keyof typeof pricingData]?.amount || 0) * (parseInt(formData.quantity) || 1)).toLocaleString('en-IN')} Securely`}
             </button>
 
             <div className="font-sans text-[9px] text-[#F0EBE3]/30 tracking-wide mt-4">
